@@ -135,9 +135,10 @@ def print_pickle(filename):
                   "Clean AP {:5.2f}".format(results[2]),
                   "Target AP {:5.2f}".format(results[3]),
                   "Parameters:", results[4])
+    print()
 
 
-def main(argv, adaptation=False):
+def main(argv, adaptation=False, filename=""):
     listParams = {
                   "XGBoost": listP(
                         {'max_depth': range(1, 6),
@@ -228,14 +229,17 @@ def main(argv, adaptation=False):
                 os.makedirs("results")
             except:
                 pass
-        f = gzip.open(f"./results/res{seed}.pklz", "wb")
+        if filename == "":
+            filename = f"./results/res{seed}.pklz"
+        f = gzip.open(filename, "wb")
         pickle.dump(results, f)
         f.close()
 
 
 if __name__ == '__main__':
-    # main(sys.argv, adaptation=False)
+    # main(sys.argv)
     # main(sys.argv, adaptation=True)
+    print_pickle("results/res1.pklz")
     print_pickle("results/res2.pklz")
     print_pickle("results/res2_adapted.pklz")
 
