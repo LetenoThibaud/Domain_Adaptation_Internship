@@ -168,7 +168,7 @@ def transfer_cross_validation_trg_to_src(X_source, y_source, X_target, param_mod
     time_start = time.time()
     nb_iteration = 0
     list_results = []
-    while time.time() - time_start < 3600 * duration_max and nb_iteration < 100:
+    while time.time() - time_start < 3600 * duration_max and nb_iteration < 10:
         np.random.seed(4896 * nb_iteration + 5272)
         param_train['reg_e'] = reg_e_loop[np.random.randint(len(reg_e_loop))]
         param_train['reg_cl'] = reg_cl_loop[np.random.randint(len(reg_cl_loop))]
@@ -199,11 +199,8 @@ def transfer_cross_validation_trg_to_src(X_source, y_source, X_target, param_mod
                                                   subset_trans2_X_target,
                                                   subset_trans_pseudo_y_target,
                                                   X_source)
-                    ic()
                     precision = 100 * float(sum(y_source_pred == y_source)) / len(y_source_pred)
-                    ic(precision)
                     average_precision = 100 * average_precision_score(y_source, y_source_pred)
-                    ic(average_precision)
                     # res = "Precision : " + str(precision) + "Average precision : " + str(average_precision)
                     # results.append(res)
                 # TODO add results + param for this loop to the pickle
@@ -287,7 +284,8 @@ def print_pickle(filename, type=""):
                       "Test AP {:5.2f}".format(results[1]),
                       "Clean AP {:5.2f}".format(results[2]),
                       "Target AP {:5.2f}".format(results[3]),
-                      "Parameters:", results[4])
+                      "Parameters:", results[4],
+                      "Parameters OT:", results[5])
     else :
         print("Data saved in", filename)
         file = gzip.open(filename, 'rb')
@@ -360,7 +358,7 @@ def main(argv, adaptation=False, filename=""):
         for algo in listParams.keys():
 
             start = time.time()
-            if len(listParams[algo]) > 1:  # Cross validation
+            '''if len(listParams[algo]) > 1:  # Cross validation
                 validParam = []
                 for param in listParams[algo]:
                     valid = []
@@ -373,14 +371,14 @@ def main(argv, adaptation=False, filename=""):
                     validParam.append(np.mean(valid))
                 param = listParams[algo][np.argmax(validParam)]
             else:  # No cross-validation
-                param = listParams[algo][0]
+                param = listParams[algo][0]'''
 
             # BEGIN EXPE
 
-            '''param = listParams[algo][0]
+            param = listParams[algo][0]
             cross_val_result = transfer_cross_validation_trg_to_src(Xsource, ysource, Xtarget, param, "exp_1.pklz")
             param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
-            Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_ot, True)'''
+            Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_ot, True)
 
             # END EXPE
             apTrain, apTest, apClean, apTarget = applyAlgo(algo, param,
@@ -388,12 +386,12 @@ def main(argv, adaptation=False, filename=""):
                                                            Xtest, ytest,
                                                            Xtarget, ytarget,
                                                            Xclean)
-            results[dataset][algo] = (apTrain, apTest, apClean, apTarget, param)
-            '''print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
+            results[dataset][algo] = (apTrain, apTest, apClean, apTarget, param, param_ot)
+            print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
                   "Test AP {:5.2f}".format(apTest),
                   "Clean AP {:5.2f}".format(apClean),
-                  "Target AP {:5.2f}".format(apTarget), param,
-                  "in {:6.2f}s".format(time.time() - start))'''
+                  "Target AP {:5.2f}".format(apTarget), param, param_ot,
+                  "in {:6.2f}s".format(time.time() - start))
         if not os.path.exists("results"):
             try:
                 os.makedirs("results")
@@ -412,7 +410,7 @@ if __name__ == '__main__':
     # configure debugging tool
     ic.configureOutput(includeContext=True)
 
-    # main(sys.argv, adaptation=True, filename="res_cross_val_ot.pklz")
+    main(sys.argv, adaptation=True, filename="res_cross_val_ot.pklz")
     # main(sys.argv, filename=res.pklz")
 
     # print_pickle("results/res_cross_val_ot.pklz", "results")
