@@ -99,7 +99,20 @@ def print_pickle(filename, type=""):
                       "Clean AP {:5.2f}".format(results[2]),
                       "Target AP {:5.2f}".format(results[3]),
                       "Parameters:", results[4])
-                # ,"Parameters OT:", results[5])
+    elif type == "results_adapt":
+        print("Data saved in", filename)
+        file = gzip.open(filename, 'rb')
+        data = pickle.load(file)
+        file.close()
+        for dataset in data:
+            for algo in data.get(dataset):
+                results = data[dataset][algo]
+                print("Dataset:", dataset, "Algo:", algo, "Train AP {:5.2f}".format(results[0]),
+                      "Test AP {:5.2f}".format(results[1]),
+                      "Clean AP {:5.2f}".format(results[2]),
+                      "Target AP {:5.2f}".format(results[3]),
+                      "Parameters:", results[4],
+                      "Parameters OT:", results[5])
     else:
         print("Data saved in", filename)
         file = gzip.open(filename, 'rb')
@@ -152,28 +165,46 @@ def main(argv, adaptation=False, filename="", ot_direction="ts"):
                 Xtarget[np.random.choice(len(Xtarget), int(len(Xtarget) / 2)),
                         feat] = 0
 
-        """
         if adaptation:
-            if ot_direction == "ts":
-                Xtarget = ot_adaptation(Xsource, ysource, Xtarget, True)
+            if ot_direction == "st":
+                param_ot = dict
+                cv_filename = "cv_" + "XGBoost" + "_" + filename
+                param = listParams["XGBoost"][0]  # PB  no cross validation
+                cross_val_result = transport_cross_validation_src_to_trg(Xsource, ysource, Xtarget, param, cv_filename)
+                param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
+                Xsource = ot_adaptation(Xsource, ysource, Xtarget, param_ot)
             else:
-                Xsource = ot_adaptation(Xsource, ysource, Xtarget)
-        """
+                param_ot = dict
+                cv_filename = "cv_" + "XGBoost" + "_" + filename
+                param = listParams["XGBoost"][0]  # PB  no cross validation
+                cross_val_result = transport_cross_validation_trg_to_src(Xsource, ysource, Xtarget, param, cv_filename)
+                param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
+                Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_ot, True)
 
-        # From the source, training and test set are created
+            # From the source, training and test set are created
         Xtrain, Xtest, ytrain, ytest = train_test_split(Xsource, ysource,
                                                         shuffle=True,
                                                         stratify=ysource,
                                                         test_size=0.3)
 
-        # For cross validation
+        # MODEL CROSS VALIDATION
         skf = StratifiedKFold(n_splits=nbFoldValid, shuffle=True)
         foldsTrainValid = list(skf.split(Xtrain, ytrain))
         results[dataset] = {}
-
         for algo in listParams.keys():
+
+            # BEGIN EXPE
+            # WE NEED TO TUNE THE PARAMETERS OF THE TRANSPORT but it will be so long to compute ...
+            """param = listParams[algo][0]
+            cv_filename = "cv_" + filename
+            cross_val_result = transfer_cross_validation_trg_to_src(Xsource, ysource, Xtarget, param,
+                                                                    cv_filename)
+            param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
+            Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_ot, True)"""
+            # END EXPE
+
             start = time.time()
-            '''if len(listParams[algo]) > 1:  # Cross validation
+            if len(listParams[algo]) > 1:  # Cross validation
                 validParam = []
                 for param in listParams[algo]:
                     valid = []
@@ -186,29 +217,28 @@ def main(argv, adaptation=False, filename="", ot_direction="ts"):
                     validParam.append(np.mean(valid))
                 param = listParams[algo][np.argmax(validParam)]
             else:  # No cross-validation
-                param = listParams[algo][0]'''
+                param = listParams[algo][0]
 
-            # BEGIN EXPE
-
-            param = listParams[algo][0]
-            cv_filename = "cv_" + filename
-            cross_val_result = transfer_cross_validation_trg_to_src(Xsource, ysource, Xtarget, param,
-                                                                    cv_filename)
-            param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
-            Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_ot, True)
-
-            # END EXPE
+            # LEARNING AND SAVING PARAMETERS
             apTrain, apTest, apClean, apTarget = applyAlgo(algo, param,
                                                            Xtrain, ytrain,
                                                            Xtest, ytest,
                                                            Xtarget, ytarget,
                                                            Xclean)
-            results[dataset][algo] = (apTrain, apTest, apClean, apTarget, param, param_ot)
-            print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
-                  "Test AP {:5.2f}".format(apTest),
-                  "Clean AP {:5.2f}".format(apClean),
-                  "Target AP {:5.2f}".format(apTarget), param, param_ot,
-                  "in {:6.2f}s".format(time.time() - start))
+            if adaptation:
+                results[dataset][algo] = (apTrain, apTest, apClean, apTarget, param, param_ot)
+                print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
+                      "Test AP {:5.2f}".format(apTest),
+                      "Clean AP {:5.2f}".format(apClean),
+                      "Target AP {:5.2f}".format(apTarget), param, param_ot,
+                      "in {:6.2f}s".format(time.time() - start))
+            else:
+                results[dataset][algo] = (apTrain, apTest, apClean, apTarget, param)
+                print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
+                      "Test AP {:5.2f}".format(apTest),
+                      "Clean AP {:5.2f}".format(apClean),
+                      "Target AP {:5.2f}".format(apTarget), param,
+                      "in {:6.2f}s".format(time.time() - start))
         if not os.path.exists("results"):
             try:
                 os.makedirs("results")
@@ -216,8 +246,6 @@ def main(argv, adaptation=False, filename="", ot_direction="ts"):
                 pass
         if filename == "":
             filename = f"./results/res{seed}.pklz"
-        else:
-            filename = f"./results/" + filename
         f = gzip.open(filename, "wb")
         pickle.dump(results, f)
         f.close()
@@ -227,8 +255,14 @@ if __name__ == '__main__':
     # configure debugging tool
     ic.configureOutput(includeContext=True)
 
-    # main(sys.argv, adaptation=False, filename="comparison_results_without_transport.pklz")
-    # main(sys.argv, adaptation=True, filename="comparison_results_with_transport_t_to_s_cv.pklz", ot_direction="st")
-    # main(sys.argv, adaptation=True, filename="comparison_results_with_transport_t_to_s_cv.pklz", ot_direction="ts")
+    main(sys.argv, adaptation=False, filename=f"./results/comparison_results_without_transport.pklz")
+    # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_t_to_s_cv.pklz",
+    # ot_direction="ts")
 
-    print_pickle("results/res_cross_val_ot1.pklz")
+    # NEED TO IMPLEMENT THE FUNCTION BEFORE
+    # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_s_to_t_cv.pklz",
+    # ot_direction="st")
+
+
+
+    # print_pickle("results/res_cross_val_ot1.pklz")
