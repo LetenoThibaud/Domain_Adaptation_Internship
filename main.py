@@ -12,6 +12,9 @@ import xgboost as xgb
 from sklearn.model_selection import StratifiedKFold
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import average_precision_score
+# tool to debug
+from icecream import ic
+
 
 
 def loadCsv(path):
@@ -122,8 +125,12 @@ def predict_label(param, X_train, y_train, X_eval, algo='XGBoost'):
                         obj=objective_AP,
                         feval=evalerror_AP,
                         verbose_eval=False)
+        prediction = bst.predict(d_eval)
 
-        return bst.predict(d_eval)
+        labels = np.array(prediction) > 0.5
+        labels = labels.astype(int)
+
+        return labels
 
 
 def generateSubset2(X, Y, p):
@@ -157,17 +164,18 @@ def transfer_cross_validation_trg_to_src(X_source, y_source, X_target, param_mod
     reg_e_loop = [0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
     reg_cl_loop = [0, 0.01, 0.03, 0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
 
-    param_train = dict()
+    param_train = dict([('reg_e', 0), ('reg_cl', 0)])
     time_start = time.time()
     nb_iteration = 0
     list_results = []
-    while time.time() - time_start < 3600 * duration_max and nb_iteration < 1000:
+    while time.time() - time_start < 3600 * duration_max and nb_iteration < 100:
         np.random.seed(4896 * nb_iteration + 5272)
-        param_train["reg_e"] = reg_e_loop[np.random.randint(len(reg_e_loop))]
-        param_train["reg_cl"] = reg_cl_loop[np.random.randint(len(reg_cl_loop))]
+        param_train['reg_e'] = reg_e_loop[np.random.randint(len(reg_e_loop))]
+        param_train['reg_cl'] = reg_cl_loop[np.random.randint(len(reg_cl_loop))]
         results = []
         try:
             for i in range(nb_training_iteration):
+                ic(param_train)
                 # Do the first adaptation (from source to target for the plan but adapt with the transpose)
                 trans_X_target = ot_adaptation(X_source, y_source, X_target, param_train, target_to_source=True)
 
@@ -180,25 +188,31 @@ def transfer_cross_validation_trg_to_src(X_source, y_source, X_target, param_mod
                 trans2_X_target = ot_adaptation(trans_X_target, trans_pseudo_y_target, X_source, param_train)
 
                 # TODO Check 10 times cf code MLOT
-                precision, average_precision = -1  # Error value
                 for j in range(10):
+                    ic()
                     subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
                                                                                            trans_pseudo_y_target,
                                                                                            p=0.5)
+                    # ic(subset_trans2_X_target)
+                    # ic(subset_trans_pseudo_y_target)
                     y_source_pred = predict_label(param_model,
                                                   subset_trans2_X_target,
                                                   subset_trans_pseudo_y_target,
                                                   X_source)
+                    ic()
                     precision = 100 * float(sum(y_source_pred == y_source)) / len(y_source_pred)
+                    ic(precision)
                     average_precision = 100 * average_precision_score(y_source, y_source_pred)
-                    res = "Precision : " + str(precision) + "Average precision : " + str(average_precision)
-                    results.append(res)
-
+                    ic(average_precision)
+                    # res = "Precision : " + str(precision) + "Average precision : " + str(average_precision)
+                    # results.append(res)
                 # TODO add results + param for this loop to the pickle
                 to_save = dict(param_train)
                 to_save['precision'] = precision
                 to_save['average_precision'] = average_precision
                 list_results.append(to_save)
+                ic(to_save)
+                ic(list_results)
                 if not os.path.exists("OT_cross_valid_results"):
                     try:
                         os.makedirs("OT_cross_valid_results")
@@ -209,11 +223,12 @@ def transfer_cross_validation_trg_to_src(X_source, y_source, X_target, param_mod
                 pickle.dump(to_save, f)
                 f.close()
                 # Remark: no cross validation on the model (already tuned)
-        except:
-            e = sys.exc_info()[0]
-            print(e)
+        except Exception as e:
+            ic()
+            print("Exception in transfer_cross_validation_trg_to_src", e)
         time.sleep(1.)  # Allow us to stop the program with ctrl-C
         nb_iteration += 1
+        ic(nb_iteration, list_results)
 
     optimal_param = max(list_results, key=lambda val: val['average_precision'])
     return optimal_param
@@ -259,7 +274,7 @@ def ot_adaptation(X_source, y_source, X_target, param_ot, target_to_source=False
         return transp_Xt
 
 
-def print_pickle(filename, type):
+def print_pickle(filename, type=""):
     if type == "results" :
         print("Data saved in", filename)
         file = gzip.open(filename, 'rb')
@@ -273,7 +288,7 @@ def print_pickle(filename, type):
                       "Clean AP {:5.2f}".format(results[2]),
                       "Target AP {:5.2f}".format(results[3]),
                       "Parameters:", results[4])
-    if type == "OT_cross_valid_results" :
+    else :
         print("Data saved in", filename)
         file = gzip.open(filename, 'rb')
         data = pickle.load(file)
@@ -300,7 +315,7 @@ def main(argv, adaptation=False, filename=""):
         seed = int(argv[1])
 
     results = {}
-    for dataset in ['abalone20', 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:
+    for dataset in ['abalone8']:  # ['abalone20', 'abalone17', 'satimage', 'abalone8']:  #
         X, y = data_recovery(dataset)
         pctPos = 100 * len(y[y == 1]) / len(y)
         dataset = "{:05.2f}%".format(pctPos) + " " + dataset
@@ -343,8 +358,9 @@ def main(argv, adaptation=False, filename=""):
         results[dataset] = {}
 
         for algo in listParams.keys():
+
             start = time.time()
-            '''if len(listParams[algo]) > 1:  # Cross validation
+            if len(listParams[algo]) > 1:  # Cross validation
                 validParam = []
                 for param in listParams[algo]:
                     valid = []
@@ -357,14 +373,14 @@ def main(argv, adaptation=False, filename=""):
                     validParam.append(np.mean(valid))
                 param = listParams[algo][np.argmax(validParam)]
             else:  # No cross-validation
-                param = listParams[algo][0]'''
+                param = listParams[algo][0]
 
             # BEGIN EXPE
 
-            param = listParams[algo][0]
+            '''param = listParams[algo][0]
             cross_val_result = transfer_cross_validation_trg_to_src(Xsource, ysource, Xtarget, param, "exp_1.pklz")
             param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
-            Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_ot, True)
+            Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_ot, True)'''
 
             # END EXPE
             apTrain, apTest, apClean, apTarget = applyAlgo(algo, param,
@@ -373,11 +389,11 @@ def main(argv, adaptation=False, filename=""):
                                                            Xtarget, ytarget,
                                                            Xclean)
             results[dataset][algo] = (apTrain, apTest, apClean, apTarget, param)
-            print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
+            '''print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
                   "Test AP {:5.2f}".format(apTest),
                   "Clean AP {:5.2f}".format(apClean),
                   "Target AP {:5.2f}".format(apTarget), param,
-                  "in {:6.2f}s".format(time.time() - start))
+                  "in {:6.2f}s".format(time.time() - start))'''
         if not os.path.exists("results"):
             try:
                 os.makedirs("results")
@@ -393,12 +409,14 @@ def main(argv, adaptation=False, filename=""):
 
 
 if __name__ == '__main__':
-    main(sys.argv, adaptation=True, filename="res_cross_val_ot.pklz")
+    # configure debugging tool
+    ic.configureOutput(includeContext=True)
+
+    # main(sys.argv, adaptation=True, filename="res_cross_val_ot.pklz")
     # main(sys.argv, filename=res.pklz")
 
-    print_pickle("results/res_cross_val_ot.pklz", "results")
-    print_pickle("OT_cross_valid_results/exp_1.pklz", "OT_cross_valid_results")
-    # print_pickle("results/res1_t_to_s.pklz")
+    # print_pickle("results/res_cross_val_ot.pklz", "results")
+    # print_pickle("OT_cross_valid_results/exp_1.pklz", "OT_cross_valid_results")
 
     ''' 
     print_pickle("results/res2.pklz")
