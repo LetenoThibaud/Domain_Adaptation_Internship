@@ -129,9 +129,10 @@ def create_grid_search_ot(params: dict):
     return possible_combination
 
 
-def transfer_cross_validation_trg_to_src(X_source, y_source, X_target, param_model, pickle_name, duration_max=48,
-                                         nb_training_iteration=10):
+def transfer_cross_validation_trg_to_src(X_source, y_source, X_target, param_model, pickle_name, duration_max=24,
+                                         nb_training_iteration=10, search_method = "GridSearch"):
     """
+    :param search_method: possible values : "GridSearch" (default) or "RandomSearch"
     :param X_source:
     :param y_source:
     :param X_target:
@@ -141,17 +142,31 @@ def transfer_cross_validation_trg_to_src(X_source, y_source, X_target, param_mod
     :param nb_training_iteration:
     :return: dictionary containing optimal reg_e, reg_cl, precision value and average_precision value
     """
-    reg_e_loop = [0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
-    reg_cl_loop = [0, 0.01, 0.03, 0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
+    possible_reg_e = [0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
+    possible_reg_cl = [0, 0.01, 0.03, 0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
+
+    max_iteration = 1000
+    possible_param_combination = []
+
+    if search_method == "GridSearch":
+        param_to_cross_valid = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
+        possible_param_combination = create_grid_search_ot(param_to_cross_valid)
+        max_iteration = len(possible_param_combination)
+        ic(len(possible_param_combination))
 
     param_train = dict([('reg_e', 0), ('reg_cl', 0)])
     time_start = time.time()
     nb_iteration = 0
     list_results = []
-    while time.time() - time_start < 3600 * duration_max and nb_iteration < 10:
+
+    while time.time() - time_start < 3600 * duration_max and nb_iteration < max_iteration:
         np.random.seed(4896 * nb_iteration + 5272)
-        param_train['reg_e'] = reg_e_loop[np.random.randint(len(reg_e_loop))]
-        param_train['reg_cl'] = reg_cl_loop[np.random.randint(len(reg_cl_loop))]
+        if search_method == "GridSearch" and len(possible_param_combination) > 0:
+            param_train['reg_e'] = possible_param_combination[nb_iteration]['reg_e']
+            param_train['reg_cl'] = possible_param_combination[nb_iteration]['reg_cl']
+        else:  # Random search
+            param_train['reg_e'] = possible_reg_e[np.random.randint(len(possible_reg_e))]
+            param_train['reg_cl'] = possible_reg_cl[np.random.randint(len(possible_reg_cl))]
         try:
             for i in range(nb_training_iteration):
                 ic(param_train)
@@ -186,8 +201,6 @@ def transfer_cross_validation_trg_to_src(X_source, y_source, X_target, param_mod
                 to_save['precision'] = precision
                 to_save['average_precision'] = average_precision
                 list_results.append(to_save)
-                ic(to_save)
-                ic(list_results)
                 if not os.path.exists("OT_cross_valid_results"):
                     try:
                         os.makedirs("OT_cross_valid_results")
@@ -203,7 +216,10 @@ def transfer_cross_validation_trg_to_src(X_source, y_source, X_target, param_mod
             print("Exception in transfer_cross_validation_trg_to_src", e)
         time.sleep(1.)  # Allow us to stop the program with ctrl-C
         nb_iteration += 1
-        ic(nb_iteration, list_results)
+        if to_save:
+            ic(nb_iteration, to_save)
+        else:
+            ic(nb_iteration)
 
     optimal_param = max(list_results, key=lambda val: val['average_precision'])
     return optimal_param

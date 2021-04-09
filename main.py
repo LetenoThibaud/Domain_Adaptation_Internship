@@ -60,6 +60,7 @@ def listP(dic):
         listParam = newListParam.copy()
     return listParam
 
+
 def applyAlgo(algo, p, Xtrain, ytrain, Xtest, ytest, Xtarget, ytarget, Xclean):
     if algo == 'XGBoost':
         dtrain = xgb.DMatrix(Xtrain, label=ytrain)
@@ -85,7 +86,7 @@ def applyAlgo(algo, p, Xtrain, ytrain, Xtest, ytest, Xtarget, ytarget, Xclean):
 
 
 def print_pickle(filename, type=""):
-    if type == "results" :
+    if type == "results":
         print("Data saved in", filename)
         file = gzip.open(filename, 'rb')
         data = pickle.load(file)
@@ -97,9 +98,9 @@ def print_pickle(filename, type=""):
                       "Test AP {:5.2f}".format(results[1]),
                       "Clean AP {:5.2f}".format(results[2]),
                       "Target AP {:5.2f}".format(results[3]),
-                      "Parameters:", results[4],
-                      "Parameters OT:", results[5])
-    else :
+                      "Parameters:", results[4])
+                # ,"Parameters OT:", results[5])
+    else:
         print("Data saved in", filename)
         file = gzip.open(filename, 'rb')
         data = pickle.load(file)
@@ -107,8 +108,7 @@ def print_pickle(filename, type=""):
         print(data)
 
 
-
-def main(argv, adaptation=False, filename=""):
+def main(argv, adaptation=False, filename="", ot_direction="ts"):
     listParams = {
         "XGBoost": listP(
             {'max_depth': range(1, 6),
@@ -126,7 +126,7 @@ def main(argv, adaptation=False, filename=""):
         seed = int(argv[1])
 
     results = {}
-    for dataset in ['abalone8']:  # ['abalone20', 'abalone17', 'satimage', 'abalone8']:  #
+    for dataset in ['abalone20', 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
         X, y = data_recovery(dataset)
         pctPos = 100 * len(y[y == 1]) / len(y)
         dataset = "{:05.2f}%".format(pctPos) + " " + dataset
@@ -152,10 +152,13 @@ def main(argv, adaptation=False, filename=""):
                 Xtarget[np.random.choice(len(Xtarget), int(len(Xtarget) / 2)),
                         feat] = 0
 
+        """
         if adaptation:
-            pass
-            # Xsource = ot_adaptation(Xsource, ysource, Xtarget)
-            # Xtarget = ot_adaptation(Xsource, ysource, Xtarget, True)
+            if ot_direction == "ts":
+                Xtarget = ot_adaptation(Xsource, ysource, Xtarget, True)
+            else:
+                Xsource = ot_adaptation(Xsource, ysource, Xtarget)
+        """
 
         # From the source, training and test set are created
         Xtrain, Xtest, ytrain, ytest = train_test_split(Xsource, ysource,
@@ -169,7 +172,6 @@ def main(argv, adaptation=False, filename=""):
         results[dataset] = {}
 
         for algo in listParams.keys():
-
             start = time.time()
             '''if len(listParams[algo]) > 1:  # Cross validation
                 validParam = []
@@ -189,7 +191,9 @@ def main(argv, adaptation=False, filename=""):
             # BEGIN EXPE
 
             param = listParams[algo][0]
-            cross_val_result = transfer_cross_validation_trg_to_src(Xsource, ysource, Xtarget, param, "exp_1.pklz")
+            cv_filename = "cv_" + filename
+            cross_val_result = transfer_cross_validation_trg_to_src(Xsource, ysource, Xtarget, param,
+                                                                    cv_filename)
             param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
             Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_ot, True)
 
@@ -223,14 +227,8 @@ if __name__ == '__main__':
     # configure debugging tool
     ic.configureOutput(includeContext=True)
 
-    main(sys.argv, adaptation=True, filename="res_cross_val_ot.pklz")
-    # main(sys.argv, filename=res.pklz")
+    # main(sys.argv, adaptation=False, filename="comparison_results_without_transport.pklz")
+    # main(sys.argv, adaptation=True, filename="comparison_results_with_transport_t_to_s_cv.pklz", ot_direction="st")
+    # main(sys.argv, adaptation=True, filename="comparison_results_with_transport_t_to_s_cv.pklz", ot_direction="ts")
 
-    # print_pickle("results/res_cross_val_ot.pklz", "results")
-    # print_pickle("OT_cross_valid_results/exp_1.pklz", "OT_cross_valid_results")
-
-    ''' 
-    print_pickle("results/res2.pklz")
-    print_pickle("results/res2_transport.pklz")
-    print_pickle("results/res2_transportEMD.pklz")
-    '''
+    print_pickle("results/res_cross_val_ot1.pklz")
