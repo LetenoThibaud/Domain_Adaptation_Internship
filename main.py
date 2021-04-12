@@ -255,14 +255,13 @@ if __name__ == '__main__':
     # configure debugging tool
     ic.configureOutput(includeContext=True)
 
-    main(sys.argv, adaptation=False, filename=f"./results/comparison_results_without_transport.pklz")
+    # main(sys.argv, adaptation=False, filename=f"./results/comparison_results_without_transport.pklz")
     # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_t_to_s_cv.pklz",
-    # ot_direction="ts")
+    #     ot_direction="ts")
 
-    # NEED TO IMPLEMENT THE FUNCTION BEFORE
     # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_s_to_t_cv.pklz",
-    # ot_direction="st")
+    #    ot_direction="st")
 
-
-
-    # print_pickle("results/res_cross_val_ot1.pklz")
+    print_pickle("results/comparison_results_without_transport.pklz", "results")
+    print_pickle("results/comparison_results_with_transport_t_to_s_cv.pklz", "results_adapt")
+    print_pickle("results/comparison_results_with_transport_s_to_t_cv.pklz", "results_adapt")

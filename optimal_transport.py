@@ -131,7 +131,7 @@ def create_grid_search_ot(params: dict):
 
 
 def transport_cross_validation_src_to_trg(X_source, y_source, X_target, param_model, pickle_name, duration_max=24,
-                                          nb_training_iteration=10, search_method = "GridSearch"):
+                                          nb_training_iteration=10, search_method="GridSearch"):
     possible_reg_e = [0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
     possible_reg_cl = [0, 0.01, 0.03, 0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
 
@@ -161,8 +161,6 @@ def transport_cross_validation_src_to_trg(X_source, y_source, X_target, param_mo
             for i in range(nb_training_iteration):
                 ic(param_train)
 
-                # TODO check code !!!
-
                 # First adaptation
                 trans_X_source = ot_adaptation(X_source, y_source, X_target, param_train, target_to_source=False)
 
@@ -171,7 +169,8 @@ def transport_cross_validation_src_to_trg(X_source, y_source, X_target, param_mo
 
                 # Second adaptation
                 trans2_X_target = ot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
-                                                X_target=X_source, param_ot=param_train)
+                                                X_target=X_source, param_ot=param_train,
+                                                target_to_source=False)
 
                 for j in range(10):
                     ic()
@@ -204,7 +203,7 @@ def transport_cross_validation_src_to_trg(X_source, y_source, X_target, param_mo
                 # Remark: no cross validation on the model (already tuned)
         except Exception as e:
             ic()
-            print("Exception in transfer_cross_validation_trg_to_src", e)
+            print("Exception in transfer_cross_validation_src_to_trg", e)
         time.sleep(1.)  # Allow us to stop the program with ctrl-C
         nb_iteration += 1
         if to_save:
