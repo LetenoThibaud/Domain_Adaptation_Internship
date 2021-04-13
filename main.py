@@ -5,6 +5,7 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.model_selection import train_test_split
 
 from optimal_transport import *
+from experimental_cv import double_cross_valid
 
 
 def loadCsv(path):
@@ -165,7 +166,14 @@ def main(argv, adaptation=False, filename="", ot_direction="ts"):
                 Xtarget[np.random.choice(len(Xtarget), int(len(Xtarget) / 2)),
                         feat] = 0
 
+        # From the source, training and test set are created
+        Xtrain, Xtest, ytrain, ytest = train_test_split(Xsource, ysource,
+                                                        shuffle=True,
+                                                        stratify=ysource,
+                                                        test_size=0.3)
+
         if adaptation:
+            """
             if ot_direction == "st":
                 param_ot = dict
                 cv_filename = "cv_" + "XGBoost" + "_" + filename
@@ -180,29 +188,23 @@ def main(argv, adaptation=False, filename="", ot_direction="ts"):
                 cross_val_result = transport_cross_validation_trg_to_src(Xsource, ysource, Xtarget, param, cv_filename)
                 param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
                 Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_ot, True)
-
-            # From the source, training and test set are created
-        Xtrain, Xtest, ytrain, ytest = train_test_split(Xsource, ysource,
-                                                        shuffle=True,
-                                                        stratify=ysource,
-                                                        test_size=0.3)
+            """
+            possible_reg_e = [0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1]  # , 1.2, 1.5, 1.7, 2, 3]
+            possible_reg_cl = [0.1, 0.3, 0.5, 0.7, 1]
+            #                 [0, 0.01, 0.03, 0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
+            param_ot = dict
+            param_model_to_tune = {'max_depth': range(1, 6), 'num_boost_round': range(100, 1001, 100)}
+            param_ot_to_tune = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
+            cross_val_result = double_cross_valid(Xtrain, ytrain, Xtarget, param_model_to_tune,
+                                                  param_ot_to_tune, filename, nb_training_iteration=5)
+            param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
+            Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_ot, True)
 
         # MODEL CROSS VALIDATION
         skf = StratifiedKFold(n_splits=nbFoldValid, shuffle=True)
         foldsTrainValid = list(skf.split(Xtrain, ytrain))
         results[dataset] = {}
         for algo in listParams.keys():
-
-            # BEGIN EXPE
-            # WE NEED TO TUNE THE PARAMETERS OF THE TRANSPORT but it will be so long to compute ...
-            """param = listParams[algo][0]
-            cv_filename = "cv_" + filename
-            cross_val_result = transfer_cross_validation_trg_to_src(Xsource, ysource, Xtarget, param,
-                                                                    cv_filename)
-            param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
-            Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_ot, True)"""
-            # END EXPE
-
             start = time.time()
             if len(listParams[algo]) > 1:  # Cross validation
                 validParam = []
@@ -262,6 +264,9 @@ if __name__ == '__main__':
     # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_s_to_t_cv.pklz",
     #    ot_direction="st")
 
+    #main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_t_to_s_2cv.pklz")
+
     print_pickle("results/comparison_results_without_transport.pklz", "results")
     print_pickle("results/comparison_results_with_transport_t_to_s_cv.pklz", "results_adapt")
+    print_pickle("results/comparison_results_with_transport_t_to_s_2cv.pklz", "results_adapt")
     print_pickle("results/comparison_results_with_transport_s_to_t_cv.pklz", "results_adapt")
