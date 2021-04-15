@@ -122,6 +122,69 @@ def print_pickle(filename, type=""):
         print(data)
 
 
+def pickle_to_latex(filename, type=""):
+    if type == "results":
+        print("Data saved in", filename)
+        file = gzip.open(filename, 'rb')
+        data = pickle.load(file)
+        file.close()
+        print("\\begin{table}[]\n\\begin{adjustbox}{max width=1.1\\textwidth,center}\n\\begin{tabular}{llllllll}",
+              "\nDataset & Algorithme & Train AP & Test AP & Clean AP & ",
+              "Target AP & max\_depth & num\_boost\_round\\\\")
+
+        for dataset in data:
+            for algo in data.get(dataset):
+                results = data[dataset][algo]
+                print(dataset.replace("%", "\\%"), "&", algo, "&", "{:5.2f}".format(results[0]), "&", "{:5.2f}".format(results[1]), "&",
+                      "{:5.2f}".format(results[2]), "&", "{:5.2f}".format(results[3]),
+                      "&", "{:5.2f}".format(results[4]['max_depth']),
+                      "&", "{:5.2f}".format(results[4]['num_boost_round']), "\\\\")
+        print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
+
+    elif type == "results_adapt":
+        print("Data saved in", filename)
+        file = gzip.open(filename, 'rb')
+        data = pickle.load(file)
+        file.close()
+        print("\\begin{table}[]\n\\begin{adjustbox}{max width=1.1\\textwidth,center}\n\\begin{tabular}{llllllllll}",
+              "\nDataset & Algorithme & Train AP & Test AP & Clean AP & ",
+              "Target AP & max\_depth & num\_boost\_round & reg\_e & reg\_cl \\\\")
+
+        for dataset in data:
+            for algo in data.get(dataset):
+                results = data[dataset][algo]
+                print(dataset.replace("%", "\\%"), "&", algo, "&", "{:5.2f}".format(results[0]), "&",
+                      "{:5.2f}".format(results[1]), "&",
+                      "{:5.2f}".format(results[2]), "&", "{:5.2f}".format(results[3]),
+                      "&", "{:5.2f}".format(results[4]['max_depth']),
+                      "&", "{:5.2f}".format(results[4]['num_boost_round']),
+                      "&", "{:5.2f}".format(results[5]['reg_e']),
+                      "&", "{:5.2f}".format(results[5]['reg_cl']), "\\\\")
+        print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
+    elif type == "results_adapt2cv":
+        print("Data saved in", filename)
+        file = gzip.open(filename, 'rb')
+        data = pickle.load(file)
+        file.close()
+        print("\\begin{table}[]\n\\begin{adjustbox}{max width=1.1\\textwidth,center}\n\\begin{tabular}{llllllllllll}",
+              "\nDataset & Algorithme & Train AP & Test AP & Clean AP & ",
+              "Target AP & max\_depth & num\_boost\_round & reg\_e & reg\_cl & CV max\_depth & CV num\_boost\_round\\\\")
+
+        for dataset in data:
+            for algo in data.get(dataset):
+                results = data[dataset][algo]
+                print(dataset.replace("%", "\\%"), "&", algo, "&", "{:5.2f}".format(results[0]), "&",
+                      "{:5.2f}".format(results[1]), "&",
+                      "{:5.2f}".format(results[2]), "&", "{:5.2f}".format(results[3]),
+                      "&", "{:5.2f}".format(results[4]['max_depth']),
+                      "&", "{:5.2f}".format(results[4]['num_boost_round']),
+                      "&", "{:5.2f}".format(results[5]['reg_e']),
+                      "&", "{:5.2f}".format(results[5]['reg_cl']),
+                      "&", "{:5.2f}".format(results[6]['param_cv_model']['max_depth']),
+                      "&", "{:5.2f}".format(results[6]['param_cv_model']['num_boost_round']), "\\\\")
+        print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
+
+
 def main(argv, adaptation=False, filename="", ot_direction="ts"):
     listParams = {
         "XGBoost": listP(
@@ -149,6 +212,10 @@ def main(argv, adaptation=False, filename="", ot_direction="ts"):
         random.seed(seed)
 
         # Split the dataset between the source and the target(s)
+
+        # TODO for UOT implementation :
+        #  create unbalance during the split between source and target !
+
         Xsource, Xtarget, ysource, ytarget = train_test_split(X, y, shuffle=True,
                                                               stratify=y,
                                                               test_size=0.51)
@@ -173,7 +240,6 @@ def main(argv, adaptation=False, filename="", ot_direction="ts"):
                                                         test_size=0.3)
 
         if adaptation:
-            """
             if ot_direction == "st":
                 param_ot = dict
                 cv_filename = "cv_" + "XGBoost" + "_" + filename
@@ -181,24 +247,26 @@ def main(argv, adaptation=False, filename="", ot_direction="ts"):
                 cross_val_result = transport_cross_validation_src_to_trg(Xsource, ysource, Xtarget, param, cv_filename)
                 param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
                 Xsource = ot_adaptation(Xsource, ysource, Xtarget, param_ot)
-            else:
+            elif ot_direction == "ts2CV":
+                possible_reg_e = [0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1]  # , 1.2, 1.5, 1.7, 2, 3]
+                possible_reg_cl = [0.1, 0.3, 0.5, 0.7, 1]
+                #                 [0, 0.01, 0.03, 0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
+                param_ot = dict
+                param_model_to_tune = {'max_depth': range(1, 6), 'num_boost_round': range(100, 1001, 100)}
+                param_ot_to_tune = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
+                cross_val_result = double_cross_valid(Xtrain, ytrain, Xtarget, param_model_to_tune,
+                                                      param_ot_to_tune, filename, nb_training_iteration=5)
+                param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
+                param_cv_model = {'param_cv_model': cross_val_result['param_model']}
+                Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_ot, True)
+            else:  # transport target in source
                 param_ot = dict
                 cv_filename = "cv_" + "XGBoost" + "_" + filename
                 param = listParams["XGBoost"][0]  # PB  no cross validation
-                cross_val_result = transport_cross_validation_trg_to_src(Xsource, ysource, Xtarget, param, cv_filename)
+                cross_val_result = transport_cross_validation_trg_to_src(Xsource, ysource, Xtarget, param, cv_filename,
+                                                                         nb_training_iteration=5)
                 param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
                 Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_ot, True)
-            """
-            possible_reg_e = [0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1]  # , 1.2, 1.5, 1.7, 2, 3]
-            possible_reg_cl = [0.1, 0.3, 0.5, 0.7, 1]
-            #                 [0, 0.01, 0.03, 0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
-            param_ot = dict
-            param_model_to_tune = {'max_depth': range(1, 6), 'num_boost_round': range(100, 1001, 100)}
-            param_ot_to_tune = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
-            cross_val_result = double_cross_valid(Xtrain, ytrain, Xtarget, param_model_to_tune,
-                                                  param_ot_to_tune, filename, nb_training_iteration=5)
-            param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
-            Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_ot, True)
 
         # MODEL CROSS VALIDATION
         skf = StratifiedKFold(n_splits=nbFoldValid, shuffle=True)
@@ -228,11 +296,12 @@ def main(argv, adaptation=False, filename="", ot_direction="ts"):
                                                            Xtarget, ytarget,
                                                            Xclean)
             if adaptation:
-                results[dataset][algo] = (apTrain, apTest, apClean, apTarget, param, param_ot)
+                results[dataset][algo] = (apTrain, apTest, apClean, apTarget, param, param_ot, param_cv_model,
+                                          time.time() - start)
                 print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
                       "Test AP {:5.2f}".format(apTest),
                       "Clean AP {:5.2f}".format(apClean),
-                      "Target AP {:5.2f}".format(apTarget), param, param_ot,
+                      "Target AP {:5.2f}".format(apTarget), param, param_ot, param_cv_model,
                       "in {:6.2f}s".format(time.time() - start))
             else:
                 results[dataset][algo] = (apTrain, apTest, apClean, apTarget, param)
@@ -258,15 +327,17 @@ if __name__ == '__main__':
     ic.configureOutput(includeContext=True)
 
     # main(sys.argv, adaptation=False, filename=f"./results/comparison_results_without_transport.pklz")
-    # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_t_to_s_cv.pklz",
-    #     ot_direction="ts")
+    main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_t_to_s_cv_corrected.pklz",
+         ot_direction="ts")
 
     # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_s_to_t_cv.pklz",
     #    ot_direction="st")
 
-    #main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_t_to_s_2cv.pklz")
+   # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_t_to_s_2cv_param.pklz")
 
-    print_pickle("results/comparison_results_without_transport.pklz", "results")
-    print_pickle("results/comparison_results_with_transport_t_to_s_cv.pklz", "results_adapt")
-    print_pickle("results/comparison_results_with_transport_t_to_s_2cv.pklz", "results_adapt")
-    print_pickle("results/comparison_results_with_transport_s_to_t_cv.pklz", "results_adapt")
+    pickle_to_latex("results/comparison_results_with_transport_t_to_s_cv_corrected.pklz", "results_adapt")
+
+    """pickle_to_latex("results/comparison_results_without_transport.pklz", "results")
+    pickle_to_latex("results/comparison_results_with_transport_t_to_s_cv.pklz", "results_adapt")
+    pickle_to_latex("results/comparison_results_with_transport_t_to_s_2cv.pklz", "results_adapt")
+    pickle_to_latex("results/comparison_results_with_transport_s_to_t_cv.pklz", "results_adapt")"""

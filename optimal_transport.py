@@ -265,13 +265,12 @@ def transport_cross_validation_trg_to_src(X_source, y_source, X_target, param_mo
                 # Do the second adaptation (from target to source)
                 # We don't use target_to_source = True, instead we reverse the target and source in parameters
                 # bc we don't want to use the transpose of a plan here, just create a plan from Target to Source
-                trans2_X_target = ot_adaptation(trans_X_target, trans_pseudo_y_target, X_source, param_train)
-                # OR trans2_X_target = ot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train) ???
-                # à revoir les idées claires
+                # trans2_X_target = ot_adaptation(trans_X_target, trans_pseudo_y_target, X_source, param_train)
+                trans2_X_target = ot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train)
 
 
                 # TODO Check 10 times cf code MLOT
-                for j in range(10):
+                for j in range(5):
                     ic()
                     subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
                                                                                            trans_pseudo_y_target,
