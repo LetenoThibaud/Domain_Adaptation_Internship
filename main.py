@@ -1,5 +1,8 @@
 import csv
 import sys
+import os
+import gzip
+import pickle
 import pandas as pd
 from sklearn.model_selection import StratifiedKFold
 from sklearn.model_selection import train_test_split
@@ -224,12 +227,12 @@ def pickle_to_latex(filename, type=""):
         print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
 
 
-def cross_validation_model(filename="tuned_hyperparameters.csv"):
+def cross_validation_model(filename="tuned_hyperparameters.csv", parameters_file=""):
     listParams = {
         "XGBoost": listP(
             {'max_depth': range(1, 6),
              'eta': [10**(-i) for i in range(1, 5)],
-             # 'subsample': np.arange(0.1, 1, 0.1),
+             'subsample': np.arange(0.1, 1, 0.1),
              # 'colsample_bytree': np.arange(0.1, 1, 0.1),
              # 'gamma': range(0, 21),
              'num_boost_round': range(100, 1001, 100)
@@ -241,7 +244,24 @@ def cross_validation_model(filename="tuned_hyperparameters.csv"):
 
     results = {}
     for dataset in ['abalone20', 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
+
+        # to speed up the computation and make it realisable, we reuse hyperparameters already tuned for the dataset
+        if parameters_file != "":
+            current_params = import_hyperparameters(dataset, parameters_file)
+            listParams = {
+                "XGBoost": listP(
+                    {'max_depth': range(1, 6),
+                     'eta': current_params['eta'],
+                     'subsample': np.arange(0.1, 1, 0.1),
+                     # 'colsample_bytree': np.arange(0.1, 1, 0.1),
+                     # 'gamma': range(0, 21),
+                     'num_boost_round': current_params['num_boost_round']
+                     })
+            }
+
+
         X, y = data_recovery(dataset)
+        dataset_name = dataset
         pctPos = 100 * len(y[y == 1]) / len(y)
         dataset = "{:05.2f}%".format(pctPos) + " " + dataset
         print(dataset)
@@ -305,7 +325,7 @@ def cross_validation_model(filename="tuned_hyperparameters.csv"):
                   "Clean AP {:5.2f}".format(apClean),
                   "Target AP {:5.2f}".format(apTarget), param,
                   "in {:6.2f}s".format(time.time() - start))
-        export_hyperparameters(dataset, param, filename)
+        export_hyperparameters(dataset_name, param, filename)
 
 
 def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
@@ -410,4 +430,4 @@ if __name__ == '__main__':
     # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_t_to_s_cv_corrected.pklz",
     #     ot_direction="ts")
 
-    cross_validation_model("tuned_hyperparameters_1.csv")
+    cross_validation_model("tuned_hyperparameters_2.csv")

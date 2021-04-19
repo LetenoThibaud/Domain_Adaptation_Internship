@@ -1,7 +1,4 @@
 import ot
-import os
-import gzip
-import pickle
 import random
 import time
 import numpy as np
@@ -51,31 +48,40 @@ def predict_label(param, X_train, y_train, X_eval, algo='XGBoost'):
         return labels
 
 
-def ot_adaptation(X_source, y_source, X_target, param_ot, transpose=False):
+def ot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
     """
-    Function computes the transport plan and transport the sources to the targets
-    or the reverse
-    :param param_ot:
-    :param param_model:
+    Function to compute the transport plan and transport targets into Source (or reverse)
+    :param param_ot: hyperparameters of the transport
     :param X_source: Source features
     :param y_source: Source labels
     :param X_target: Target features
-    :param transpose: boolean set by default to False (transport sources to targets)
-    if boolean is set to True the X_target is transported in the Source domain
+    :param transpose: boolean set by default to True : the X_target is transported in the Source domain
+    if False : the sources are transported in the Target domain (classic transport)
     :return: Return the source features transported into the target if target_to_source = False
             Return the target features transported into the source if target_to_source = True
     """
     transport = ot.da.SinkhornLpl1Transport(reg_e=param_ot['reg_e'], reg_cl=param_ot['reg_cl'], norm="median")
     transport.fit(Xs=X_source, ys=y_source, Xt=X_target)
-    if not transpose:
-        transp_Xs = transport.transform(Xs=X_source)
-        return transp_Xs
-    else:
+    if transpose:
         transp_Xt = transport.inverse_transform(Xt=X_target)
         return transp_Xt
+    else:
+        transp_Xs = transport.transform(Xs=X_source)
+        return transp_Xs
 
 
-def uot_adaptation(X_source, y_source, X_target, param_ot, target_to_source=False):
+def uot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
+    """
+    Function to compute the transport plan and transport targets into Source (or reverse) with Unbalanced OT
+    :param param_ot: hyperparameters of the transport
+    :param X_source: Source features
+    :param y_source: Source labels
+    :param X_target: Target features
+    :param transpose: boolean set by default to True : the X_target is transported in the Source domain
+    if False : the sources are transported in the Target domain (classic transport)
+    :return: Return the source features transported into the target if target_to_source = False
+            Return the target features transported into the source if target_to_source = True
+    """
     # https://pythonot.github.io/_modules/ot/da.html#SinkhornLpl1Transport
     # https://pythonot.github.io/gen_modules/ot.unbalanced.html
     # https://pythonot.github.io/_modules/ot/unbalanced.html#sinkhorn_knopp_unbalanced
@@ -83,12 +89,12 @@ def uot_adaptation(X_source, y_source, X_target, param_ot, target_to_source=Fals
     transport = ot.da.UnbalancedSinkhornTransport(reg_e=param_ot['reg_e'], reg_m=param_ot['reg_m'])
     # default use sinkhorn_knopp_unbalanced
     transport.fit(Xs=X_source, ys=y_source, Xt=X_target)
-    if not target_to_source:
-        transp_Xs = transport.transform(Xs=X_source)
-        return transp_Xs
-    else:
+    if transpose:
         transp_Xt = transport.inverse_transform(Xt=X_target)
         return transp_Xt
+    else:
+        transp_Xs = transport.transform(Xs=X_source)
+        return transp_Xs
 
 
 def generateSubset2(X, Y, p):
@@ -161,8 +167,6 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
 
     while time.time() - time_start < 3600 * duration_max and nb_iteration < max_iteration:
         np.random.seed(4896 * nb_iteration + 5272)
-        # TODO generalize so that if need to cross validate more parameters
-        #  we won't have to rewrite the code
         if gridsearch and len(possible_param_combination) > 0:
             param_train = possible_param_combination[nb_iteration]
         else:  # Random search
@@ -178,7 +182,7 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                         trans_X_target = ot_adaptation(X_source, y_source, X_target, param_train, transpose=True)
                     else:  # Unbalanced OT
                         trans_X_target = uot_adaptation(X_source, y_source, X_target, param_train,
-                                                        target_to_source=True)
+                                                        transpose=True)
 
                     # Get pseudo labels
                     trans_pseudo_y_target = predict_label(param_model, X_source, y_source, trans_X_target)
@@ -219,7 +223,7 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                                                        transpose=False)
                     else:
                         trans_X_source = uot_adaptation(X_source, y_source, X_target, param_train,
-                                                        target_to_source=False)
+                                                        transpose=False)
                     # Get pseudo labels
                     trans_pseudo_y_source = predict_label(param_model, trans_X_source, y_source, X_target)
 
@@ -231,7 +235,7 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                     else:  # Unbalanced OT
                         trans2_X_target = uot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
                                                          X_target=X_source, param_ot=param_train,
-                                                         target_to_source=False)
+                                                         transpose=False)
 
                     for j in range(10):
                         ic()
