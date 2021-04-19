@@ -40,7 +40,7 @@ def double_cross_valid(X_source, y_source, X_target, param_model, param_ot, pick
                 ic(param_train)
 
                 # First adaptation
-                trans_X_target = ot_adaptation(X_source, y_source, X_target, param_train, target_to_source=True)
+                trans_X_target = ot_adaptation(X_source, y_source, X_target, param_train, transpose=True)
 
                 # Get pseudo labels
                 trans_pseudo_y_target = predict_label(tuned_param_model, X_source, y_source, trans_X_target)

@@ -15,8 +15,46 @@ def loadCsv(path):
         for row in reader:
             data.append(np.array(row))
     data = np.array(data)
-    (n, d) = data.shape
+    n = 0
+    d = 0
+    try:
+        (n, d) = data.shape
+    except ValueError:
+        pass
     return data, n, d
+
+
+def import_hyperparameters(algo: str, filename="hyperparameters.csv"):
+    """
+    :param filename:
+    :param algo: name of the algorithm we want the hyperparameters of
+    :return: a dictionary of hyperparameters
+    """
+    imported_csv_content = pd.read_csv(filename, delimiter=";")
+    to_return = dict()
+    column = imported_csv_content[algo]
+    for i in range(len(column)):
+        key, value = imported_csv_content[algo][i].split(",")
+        to_return[key] = value
+    return to_return
+
+
+def export_hyperparameters(algo, hyperparameters, filename="hyperparameters.csv"):
+    """
+    :param filename:
+    :param algo: name of the algo (str)
+    :param hyperparameters: a dictionary of parameters we want to save
+    :return:
+    """
+    list_hyperparam = []
+    for key in hyperparameters.keys():
+        list_hyperparam.append((key + "," + str(hyperparameters[key])))
+    try:
+        hyperparameters_dataset = pd.read_csv(filename, delimiter=";")
+        hyperparameters_dataset[algo] = list_hyperparam
+    except FileNotFoundError:
+        hyperparameters_dataset = pd.DataFrame(columns=[algo], data=list_hyperparam)
+    hyperparameters_dataset.to_csv(filename, index=False)
 
 
 def data_recovery(dataset):
@@ -135,7 +173,8 @@ def pickle_to_latex(filename, type=""):
         for dataset in data:
             for algo in data.get(dataset):
                 results = data[dataset][algo]
-                print(dataset.replace("%", "\\%"), "&", algo, "&", "{:5.2f}".format(results[0]), "&", "{:5.2f}".format(results[1]), "&",
+                print(dataset.replace("%", "\\%"), "&", algo, "&", "{:5.2f}".format(results[0]), "&",
+                      "{:5.2f}".format(results[1]), "&",
                       "{:5.2f}".format(results[2]), "&", "{:5.2f}".format(results[3]),
                       "&", "{:5.2f}".format(results[4]['max_depth']),
                       "&", "{:5.2f}".format(results[4]['num_boost_round']), "\\\\")
@@ -185,11 +224,11 @@ def pickle_to_latex(filename, type=""):
         print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
 
 
-def main(argv, adaptation=False, filename="", ot_direction="ts"):
+def cross_validation_model(filename="tuned_hyperparameters.csv"):
     listParams = {
         "XGBoost": listP(
             {'max_depth': range(1, 6),
-             # 'eta': [10**(-i) for i in range(1, 5)],
+             'eta': [10**(-i) for i in range(1, 5)],
              # 'subsample': np.arange(0.1, 1, 0.1),
              # 'colsample_bytree': np.arange(0.1, 1, 0.1),
              # 'gamma': range(0, 21),
@@ -199,8 +238,6 @@ def main(argv, adaptation=False, filename="", ot_direction="ts"):
 
     nbFoldValid = 5
     seed = 1
-    if len(argv) == 2:
-        seed = int(argv[1])
 
     results = {}
     for dataset in ['abalone20', 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
@@ -210,11 +247,6 @@ def main(argv, adaptation=False, filename="", ot_direction="ts"):
         print(dataset)
         np.random.seed(seed)
         random.seed(seed)
-
-        # Split the dataset between the source and the target(s)
-
-        # TODO for UOT implementation :
-        #  create unbalance during the split between source and target !
 
         Xsource, Xtarget, ysource, ytarget = train_test_split(X, y, shuffle=True,
                                                               stratify=y,
@@ -238,35 +270,6 @@ def main(argv, adaptation=False, filename="", ot_direction="ts"):
                                                         shuffle=True,
                                                         stratify=ysource,
                                                         test_size=0.3)
-
-        if adaptation:
-            if ot_direction == "st":
-                param_ot = dict
-                cv_filename = "cv_" + "XGBoost" + "_" + filename
-                param = listParams["XGBoost"][0]  # PB  no cross validation
-                cross_val_result = transport_cross_validation_src_to_trg(Xsource, ysource, Xtarget, param, cv_filename)
-                param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
-                Xsource = ot_adaptation(Xsource, ysource, Xtarget, param_ot)
-            elif ot_direction == "ts2CV":
-                possible_reg_e = [0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1]  # , 1.2, 1.5, 1.7, 2, 3]
-                possible_reg_cl = [0.1, 0.3, 0.5, 0.7, 1]
-                #                 [0, 0.01, 0.03, 0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
-                param_ot = dict
-                param_model_to_tune = {'max_depth': range(1, 6), 'num_boost_round': range(100, 1001, 100)}
-                param_ot_to_tune = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
-                cross_val_result = double_cross_valid(Xtrain, ytrain, Xtarget, param_model_to_tune,
-                                                      param_ot_to_tune, filename, nb_training_iteration=5)
-                param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
-                param_cv_model = {'param_cv_model': cross_val_result['param_model']}
-                Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_ot, True)
-            else:  # transport target in source
-                param_ot = dict
-                cv_filename = "cv_" + "XGBoost" + "_" + filename
-                param = listParams["XGBoost"][0]  # PB  no cross validation
-                cross_val_result = transport_cross_validation_trg_to_src(Xsource, ysource, Xtarget, param, cv_filename,
-                                                                         nb_training_iteration=5)
-                param_ot = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
-                Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_ot, True)
 
         # MODEL CROSS VALIDATION
         skf = StratifiedKFold(n_splits=nbFoldValid, shuffle=True)
@@ -295,21 +298,99 @@ def main(argv, adaptation=False, filename="", ot_direction="ts"):
                                                            Xtest, ytest,
                                                            Xtarget, ytarget,
                                                            Xclean)
-            if adaptation:
-                results[dataset][algo] = (apTrain, apTest, apClean, apTarget, param, param_ot, param_cv_model,
-                                          time.time() - start)
-                print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
-                      "Test AP {:5.2f}".format(apTest),
-                      "Clean AP {:5.2f}".format(apClean),
-                      "Target AP {:5.2f}".format(apTarget), param, param_ot, param_cv_model,
-                      "in {:6.2f}s".format(time.time() - start))
+
+            results[dataset][algo] = (apTrain, apTest, apClean, apTarget, param)
+            print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
+                  "Test AP {:5.2f}".format(apTest),
+                  "Clean AP {:5.2f}".format(apClean),
+                  "Target AP {:5.2f}".format(apTarget), param,
+                  "in {:6.2f}s".format(time.time() - start))
+        export_hyperparameters(dataset, param, filename)
+
+
+def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
+
+    seed = 1
+    if len(argv) == 2:
+        seed = int(argv[1])
+
+    results = {}
+    for dataset in ['abalone20', 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
+
+        start = time.time()
+        X, y = data_recovery(dataset)
+        pctPos = 100 * len(y[y == 1]) / len(y)
+        dataset = "{:05.2f}%".format(pctPos) + " " + dataset
+        print(dataset)
+        np.random.seed(seed)
+        random.seed(seed)
+
+        # import the tuned parameters of the model for this dataset
+        params_model = import_hyperparameters(dataset, "tuned_hyperparameters.csv")
+        param_tranport = dict()
+
+        # Split the dataset between the source and the target(s)
+        # TODO for UOT implementation :
+        #  create unbalance during the split between source and target !
+        Xsource, Xtarget, ysource, ytarget = train_test_split(X, y, shuffle=True,
+                                                              stratify=y,
+                                                              test_size=0.51)
+        # Keep a clean backup of Xtarget before degradation.
+        Xclean = Xtarget.copy()
+        # for loop -> degradation of the target
+        # 3 features are deteriorated : the 2nd, the 3rd and the 4th
+        for feat, coef in [(2, 0.1), (3, 10), (4, 0)]:
+            # for features 2 and 3, their values are multiplied by a coefficient
+            # resp. 0.1 and 10
+            if coef != 0:
+                Xtarget[:, feat] = Xtarget[:, feat] * coef
+            # for feature 4, some of its values are (randomly) set to 0
             else:
-                results[dataset][algo] = (apTrain, apTest, apClean, apTarget, param)
-                print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
-                      "Test AP {:5.2f}".format(apTest),
-                      "Clean AP {:5.2f}".format(apClean),
-                      "Target AP {:5.2f}".format(apTarget), param,
-                      "in {:6.2f}s".format(time.time() - start))
+                Xtarget[np.random.choice(len(Xtarget), int(len(Xtarget) / 2)), feat] = 0
+
+        # From the source, training and test set are created
+        Xtrain, Xtest, ytrain, ytest = train_test_split(Xsource, ysource,
+                                                        shuffle=True,
+                                                        stratify=ysource,
+                                                        test_size=0.3)
+
+        # todo supprimer le if adaptation: et remplacer par :
+        #  faire un premier if pour le choix entre uot, ot et autre baselines
+        #  faire un second if pour la direction
+        if adaptation == "UOT" or adaptation == "OT":
+            # we define the parameters to cross valid
+            possible_reg_e = [0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1]  # , 1.2, 1.5, 1.7, 2, 3]
+            possible_reg_cl = [0.1, 0.3, 0.5, 0.7, 1]
+            #                 [0, 0.01, 0.03, 0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
+            param_to_cv = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
+
+            param_ot = dict
+            cross_val_result = ot_cross_validation(Xsource, ysource, Xtarget, params_model, param_to_cv,
+                                                   transpose_plan=transpose, ot_type=adaptation)
+            param_tranport = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
+
+            # Unbalanced optimal transport sources to Target
+            if not transpose:
+                Xsource = ot_adaptation(Xsource, ysource, Xtarget, param_tranport)
+            # Unbalanced optimal transport targets to Source
+            else:
+                Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_tranport, transpose=True)
+
+        # LEARNING AND SAVING PARAMETERS
+        apTrain, apTest, apClean, apTarget = applyAlgo(algo, params_model,
+                                                       Xtrain, ytrain,
+                                                       Xtest, ytest,
+                                                       Xtarget, ytarget,
+                                                       Xclean)
+
+        results[dataset][algo] = (apTrain, apTest, apClean, apTarget, params_model, param_tranport,
+                                  time.time() - start)
+        print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
+              "Test AP {:5.2f}".format(apTest),
+              "Clean AP {:5.2f}".format(apClean),
+              "Target AP {:5.2f}".format(apTarget), params_model, param_tranport,
+              "in {:6.2f}s".format(time.time() - start))
+
         if not os.path.exists("results"):
             try:
                 os.makedirs("results")
@@ -326,18 +407,7 @@ if __name__ == '__main__':
     # configure debugging tool
     ic.configureOutput(includeContext=True)
 
-    # main(sys.argv, adaptation=False, filename=f"./results/comparison_results_without_transport.pklz")
-    main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_t_to_s_cv_corrected.pklz",
-         ot_direction="ts")
+    # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_t_to_s_cv_corrected.pklz",
+    #     ot_direction="ts")
 
-    # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_s_to_t_cv.pklz",
-    #    ot_direction="st")
-
-   # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_t_to_s_2cv_param.pklz")
-
-    pickle_to_latex("results/comparison_results_with_transport_t_to_s_cv_corrected.pklz", "results_adapt")
-
-    """pickle_to_latex("results/comparison_results_without_transport.pklz", "results")
-    pickle_to_latex("results/comparison_results_with_transport_t_to_s_cv.pklz", "results_adapt")
-    pickle_to_latex("results/comparison_results_with_transport_t_to_s_2cv.pklz", "results_adapt")
-    pickle_to_latex("results/comparison_results_with_transport_s_to_t_cv.pklz", "results_adapt")"""
+    cross_validation_model("tuned_hyperparameters_1.csv")

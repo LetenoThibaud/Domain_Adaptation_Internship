@@ -51,7 +51,7 @@ def predict_label(param, X_train, y_train, X_eval, algo='XGBoost'):
         return labels
 
 
-def ot_adaptation(X_source, y_source, X_target, param_ot, target_to_source=False):
+def ot_adaptation(X_source, y_source, X_target, param_ot, transpose=False):
     """
     Function computes the transport plan and transport the sources to the targets
     or the reverse
@@ -60,29 +60,28 @@ def ot_adaptation(X_source, y_source, X_target, param_ot, target_to_source=False
     :param X_source: Source features
     :param y_source: Source labels
     :param X_target: Target features
-    :param target_to_source: boolean set by default to False (transport sources to targets)
+    :param transpose: boolean set by default to False (transport sources to targets)
     if boolean is set to True the X_target is transported in the Source domain
     :return: Return the source features transported into the target if target_to_source = False
             Return the target features transported into the source if target_to_source = True
     """
-    # transport = ot.da.EMDTransport()
-    # doc : Domain Adaptation OT method based on sinkhorn algorithm + LpL1 class regularization.
-    # LpL1 : class-label based regularizer built upon an lp − l1 norm (Courty et al., 2016)
-    ''' From the doc :
-    - fit(Xs=None, ys=None, Xt=None, yt=None)
-                        -> Build a coupling matrix from source and target sets of samples (Xs, ys) and (Xt, yt)
-    - fit_transform(Xs=None, ys=None, Xt=None, yt=None)
-                        -> Build a coupling matrix from source and target sets of samples (Xs, ys) and (Xt, yt) 
-                        and transports source samples Xs onto target ones Xt
-    - transform(Xs=None, ys=None, Xt=None, yt=None, batch_size=128)
-                        -> Transports source samples Xs onto target ones Xt
-    - inverse_transform(Xs=None, ys=None, Xt=None, yt=None, batch_size=128 
-                        -> Transports target samples Xt onto source samples Xs
-    '''
-
-    reg_entropy = param_ot['reg_e']
-    reg_classes = param_ot['reg_cl']
     transport = ot.da.SinkhornLpl1Transport(reg_e=param_ot['reg_e'], reg_cl=param_ot['reg_cl'], norm="median")
+    transport.fit(Xs=X_source, ys=y_source, Xt=X_target)
+    if not transpose:
+        transp_Xs = transport.transform(Xs=X_source)
+        return transp_Xs
+    else:
+        transp_Xt = transport.inverse_transform(Xt=X_target)
+        return transp_Xt
+
+
+def uot_adaptation(X_source, y_source, X_target, param_ot, target_to_source=False):
+    # https://pythonot.github.io/_modules/ot/da.html#SinkhornLpl1Transport
+    # https://pythonot.github.io/gen_modules/ot.unbalanced.html
+    # https://pythonot.github.io/_modules/ot/unbalanced.html#sinkhorn_knopp_unbalanced
+
+    transport = ot.da.UnbalancedSinkhornTransport(reg_e=param_ot['reg_e'], reg_m=param_ot['reg_m'])
+    # default use sinkhorn_knopp_unbalanced
     transport.fit(Xs=X_source, ys=y_source, Xt=X_target)
     if not target_to_source:
         transp_Xs = transport.transform(Xs=X_source)
@@ -130,112 +129,27 @@ def create_grid_search_ot(params: dict):
     return possible_combination
 
 
-def transport_cross_validation_src_to_trg(X_source, y_source, X_target, param_model, pickle_name, duration_max=24,
-                                          nb_training_iteration=10, search_method="GridSearch"):
-    possible_reg_e = [0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
-    possible_reg_cl = [0, 0.01, 0.03, 0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
-
-    max_iteration = 1000
-    possible_param_combination = []
-
-    if search_method == "GridSearch":
-        param_to_cross_valid = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
-        possible_param_combination = create_grid_search_ot(param_to_cross_valid)
-        max_iteration = len(possible_param_combination)
-        ic(len(possible_param_combination))
-
-    param_train = dict([('reg_e', 0), ('reg_cl', 0)])
-    time_start = time.time()
-    nb_iteration = 0
-    list_results = []
-
-    while time.time() - time_start < 3600 * duration_max and nb_iteration < max_iteration:
-        np.random.seed(4896 * nb_iteration + 5272)
-        if search_method == "GridSearch" and len(possible_param_combination) > 0:
-            param_train['reg_e'] = possible_param_combination[nb_iteration]['reg_e']
-            param_train['reg_cl'] = possible_param_combination[nb_iteration]['reg_cl']
-        else:  # Random search
-            param_train['reg_e'] = possible_reg_e[np.random.randint(len(possible_reg_e))]
-            param_train['reg_cl'] = possible_reg_cl[np.random.randint(len(possible_reg_cl))]
-        try:
-            for i in range(nb_training_iteration):
-                ic(param_train)
-
-                # First adaptation
-                trans_X_source = ot_adaptation(X_source, y_source, X_target, param_train, target_to_source=False)
-
-                # Get pseudo labels
-                trans_pseudo_y_source = predict_label(param_model, trans_X_source, y_source, X_target)
-
-                # Second adaptation
-                trans2_X_target = ot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
-                                                X_target=X_source, param_ot=param_train,
-                                                target_to_source=False)
-
-                for j in range(10):
-                    ic()
-                    subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
-                                                                                           trans_pseudo_y_source,
-                                                                                           p=0.5)
-                    # ic(subset_trans2_X_target)
-                    # ic(subset_trans_pseudo_y_target)
-                    y_source_pred = predict_label(param_model,
-                                                  subset_trans2_X_target,
-                                                  subset_trans_pseudo_y_target,
-                                                  X_source)
-                    precision = 100 * float(sum(y_source_pred == y_source)) / len(y_source_pred)
-                    average_precision = 100 * average_precision_score(y_source, y_source_pred)
-
-                # add results + param for this loop to the pickle
-                to_save = dict(param_train)
-                to_save['precision'] = precision
-                to_save['average_precision'] = average_precision
-                list_results.append(to_save)
-                if not os.path.exists("OT_cross_valid_results"):
-                    try:
-                        os.makedirs("OT_cross_valid_results")
-                    except:
-                        pass
-                pickle_name = f"./OT_cross_valid_results/" + pickle_name
-                f = gzip.open(pickle_name, "wb")
-                pickle.dump(to_save, f)
-                f.close()
-                # Remark: no cross validation on the model (already tuned)
-        except Exception as e:
-            ic()
-            print("Exception in transfer_cross_validation_src_to_trg", e)
-        time.sleep(1.)  # Allow us to stop the program with ctrl-C
-        nb_iteration += 1
-        if to_save:
-            ic(nb_iteration, to_save)
-        else:
-            ic(nb_iteration)
-
-    optimal_param = max(list_results, key=lambda val: val['average_precision'])
-    return optimal_param
-
-
-def transport_cross_validation_trg_to_src(X_source, y_source, X_target, param_model, pickle_name, duration_max=24,
-                                          nb_training_iteration=10, search_method = "GridSearch"):
+def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cross_valid,
+                        transpose_plan=True, ot_type="UOT",
+                        duration_max=24, nb_training_iteration=10, gridsearch=True):
     """
-    :param search_method: possible values : "GridSearch" (default) or "RandomSearch"
+    find the best hyperparameters for an optimal transport
     :param X_source:
     :param y_source:
     :param X_target:
-    :param param_model:
-    :param pickle_name:
-    :param duration_max:
+    :param param_model: parameters of the model (eg. XGBoost)
+    :param param_to_cross_valid: dictionary of parameters we want to cross valid
+    :param transpose_plan: True to project targets in Source, False otherwise (classic OT)
+    :param ot_type: values can be "UOT" or "OT"
+    :param duration_max: maximum running time
     :param nb_training_iteration:
-    :return: dictionary containing optimal reg_e, reg_cl, precision value and average_precision value
+    :param gridsearch: if True a GridSearch is done to tune the parameters, otherwise it RandomSearch
+    :return:
     """
-    possible_reg_e = [0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
-    possible_reg_cl = [0, 0.01, 0.03, 0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
-
     max_iteration = 1000
     possible_param_combination = []
 
-    if search_method == "GridSearch":
-        param_to_cross_valid = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
+    if gridsearch:
         possible_param_combination = create_grid_search_ot(param_to_cross_valid)
         max_iteration = len(possible_param_combination)
         ic(len(possible_param_combination))
@@ -247,58 +161,97 @@ def transport_cross_validation_trg_to_src(X_source, y_source, X_target, param_mo
 
     while time.time() - time_start < 3600 * duration_max and nb_iteration < max_iteration:
         np.random.seed(4896 * nb_iteration + 5272)
-        if search_method == "GridSearch" and len(possible_param_combination) > 0:
+        # TODO generalize so that if need to cross validate more parameters
+        #  we won't have to rewrite the code
+        if gridsearch and len(possible_param_combination) > 0:
             param_train['reg_e'] = possible_param_combination[nb_iteration]['reg_e']
             param_train['reg_cl'] = possible_param_combination[nb_iteration]['reg_cl']
         else:  # Random search
-            param_train['reg_e'] = possible_reg_e[np.random.randint(len(possible_reg_e))]
-            param_train['reg_cl'] = possible_reg_cl[np.random.randint(len(possible_reg_cl))]
+            param_train['reg_e'] = param_to_cross_valid['reg_e'][np.random.randint(len(param_to_cross_valid['reg_e']))]
+            param_train['reg_cl'] = param_to_cross_valid['reg_cl'][np.random.randint(len(param_to_cross_valid['reg_cl']))]
         try:
             for i in range(nb_training_iteration):
                 ic(param_train)
-                # Do the first adaptation (from source to target for the plan but adapt with the transpose)
-                trans_X_target = ot_adaptation(X_source, y_source, X_target, param_train, target_to_source=True)
+                # if we want to project the targets in the Source domain
+                if transpose_plan:
+                    # Do the first adaptation (from source to target for the plan but adapt with the transpose)
+                    if ot_type == "OT":
+                        trans_X_target = ot_adaptation(X_source, y_source, X_target, param_train, transpose=True)
+                    else: # Unbalanced OT
+                        trans_X_target = uot_adaptation(X_source, y_source, X_target, param_train, target_to_source=True)
 
-                # Get pseudo labels
-                trans_pseudo_y_target = predict_label(param_model, X_source, y_source, trans_X_target)
+                    # Get pseudo labels
+                    trans_pseudo_y_target = predict_label(param_model, X_source, y_source, trans_X_target)
 
-                # Do the second adaptation (from target to source)
-                # We don't use target_to_source = True, instead we reverse the target and source in parameters
-                # bc we don't want to use the transpose of a plan here, just create a plan from Target to Source
-                # trans2_X_target = ot_adaptation(trans_X_target, trans_pseudo_y_target, X_source, param_train)
-                trans2_X_target = ot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train)
+                    # Do the second adaptation (from target to source)
+                    # We don't use target_to_source = True, instead we reverse the target and source in parameters
+                    # bc we don't want to use the transpose of a plan here, just create a plan from Target to Source
+                    # trans2_X_target = ot_adaptation(trans_X_target, trans_pseudo_y_target, X_source, param_train)
+                    if ot_type == "OT":
+                        trans2_X_target = ot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train)
+                    else:  # Unbalanced OT
+                        trans2_X_target = uot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train)
 
+                    for j in range(10):
+                        ic()
+                        subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
+                                                                                               trans_pseudo_y_target,
+                                                                                               p=0.5)
+                        # ic(subset_trans2_X_target)
+                        # ic(subset_trans_pseudo_y_target)
+                        y_source_pred = predict_label(param_model,
+                                                      subset_trans2_X_target,
+                                                      subset_trans_pseudo_y_target,
+                                                      X_source)
+                        precision = 100 * float(sum(y_source_pred == y_source)) / len(y_source_pred)
+                        average_precision = 100 * average_precision_score(y_source, y_source_pred)
 
-                # TODO Check 10 times cf code MLOT
-                for j in range(5):
-                    ic()
-                    subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
-                                                                                           trans_pseudo_y_target,
-                                                                                           p=0.5)
-                    # ic(subset_trans2_X_target)
-                    # ic(subset_trans_pseudo_y_target)
-                    y_source_pred = predict_label(param_model,
-                                                  subset_trans2_X_target,
-                                                  subset_trans_pseudo_y_target,
-                                                  X_source)
-                    precision = 100 * float(sum(y_source_pred == y_source)) / len(y_source_pred)
-                    average_precision = 100 * average_precision_score(y_source, y_source_pred)
+                    # add results + param for this loop to the pickle
+                    to_save = dict(param_train)
+                    to_save['precision'] = precision
+                    to_save['average_precision'] = average_precision
+                    list_results.append(to_save)
+                # if we want to project the sources in the Target domain (classic method)
+                else :
+                    # First adaptation
+                    if ot_type == "OT":
+                        trans_X_source = ot_adaptation(X_source, y_source, X_target, param_train,
+                                                       transpose=False)
+                    else:
+                         trans_X_source = uot_adaptation(X_source, y_source, X_target, param_train,
+                                                        target_to_source=False)
+                    # Get pseudo labels
+                    trans_pseudo_y_source = predict_label(param_model, trans_X_source, y_source, X_target)
 
-                # add results + param for this loop to the pickle
-                to_save = dict(param_train)
-                to_save['precision'] = precision
-                to_save['average_precision'] = average_precision
-                list_results.append(to_save)
-                if not os.path.exists("OT_cross_valid_results"):
-                    try:
-                        os.makedirs("OT_cross_valid_results")
-                    except:
-                        pass
-                pickle_name = f"./OT_cross_valid_results/" + pickle_name
-                f = gzip.open(pickle_name, "wb")
-                pickle.dump(to_save, f)
-                f.close()
-                # Remark: no cross validation on the model (already tuned)
+                    # Second adaptation
+                    if ot_type == "OT":
+                        trans2_X_target = ot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
+                                                        X_target=X_source, param_ot=param_train,
+                                                        transpose=False)
+                    else:  # Unbalanced OT
+                        trans2_X_target = uot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
+                                                            X_target=X_source, param_ot=param_train,
+                                                            target_to_source=False)
+
+                    for j in range(10):
+                        ic()
+                        subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
+                                                                                               trans_pseudo_y_source,
+                                                                                               p=0.5)
+                        # ic(subset_trans2_X_target)
+                        # ic(subset_trans_pseudo_y_target)
+                        y_source_pred = predict_label(param_model,
+                                                      subset_trans2_X_target,
+                                                      subset_trans_pseudo_y_target,
+                                                      X_source)
+                        precision = 100 * float(sum(y_source_pred == y_source)) / len(y_source_pred)
+                        average_precision = 100 * average_precision_score(y_source, y_source_pred)
+
+                    # add results + param for this loop to the pickle
+                    to_save = dict(param_train)
+                    to_save['precision'] = precision
+                    to_save['average_precision'] = average_precision
+                    list_results.append(to_save)
         except Exception as e:
             ic()
             print("Exception in transfer_cross_validation_trg_to_src", e)
@@ -311,3 +264,4 @@ def transport_cross_validation_trg_to_src(X_source, y_source, X_target, param_mo
 
     optimal_param = max(list_results, key=lambda val: val['average_precision'])
     return optimal_param
+
