@@ -164,11 +164,10 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
         # TODO generalize so that if need to cross validate more parameters
         #  we won't have to rewrite the code
         if gridsearch and len(possible_param_combination) > 0:
-            param_train['reg_e'] = possible_param_combination[nb_iteration]['reg_e']
-            param_train['reg_cl'] = possible_param_combination[nb_iteration]['reg_cl']
+            param_train = possible_param_combination[nb_iteration]
         else:  # Random search
-            param_train['reg_e'] = param_to_cross_valid['reg_e'][np.random.randint(len(param_to_cross_valid['reg_e']))]
-            param_train['reg_cl'] = param_to_cross_valid['reg_cl'][np.random.randint(len(param_to_cross_valid['reg_cl']))]
+            for key in param_to_cross_valid.keys():
+                param_train[key] = param_to_cross_valid[key][np.random.randint(len(param_to_cross_valid[key]))]
         try:
             for i in range(nb_training_iteration):
                 ic(param_train)
@@ -177,8 +176,9 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                     # Do the first adaptation (from source to target for the plan but adapt with the transpose)
                     if ot_type == "OT":
                         trans_X_target = ot_adaptation(X_source, y_source, X_target, param_train, transpose=True)
-                    else: # Unbalanced OT
-                        trans_X_target = uot_adaptation(X_source, y_source, X_target, param_train, target_to_source=True)
+                    else:  # Unbalanced OT
+                        trans_X_target = uot_adaptation(X_source, y_source, X_target, param_train,
+                                                        target_to_source=True)
 
                     # Get pseudo labels
                     trans_pseudo_y_target = predict_label(param_model, X_source, y_source, trans_X_target)
@@ -212,13 +212,13 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                     to_save['average_precision'] = average_precision
                     list_results.append(to_save)
                 # if we want to project the sources in the Target domain (classic method)
-                else :
+                else:
                     # First adaptation
                     if ot_type == "OT":
                         trans_X_source = ot_adaptation(X_source, y_source, X_target, param_train,
                                                        transpose=False)
                     else:
-                         trans_X_source = uot_adaptation(X_source, y_source, X_target, param_train,
+                        trans_X_source = uot_adaptation(X_source, y_source, X_target, param_train,
                                                         target_to_source=False)
                     # Get pseudo labels
                     trans_pseudo_y_source = predict_label(param_model, trans_X_source, y_source, X_target)
@@ -230,8 +230,8 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                                                         transpose=False)
                     else:  # Unbalanced OT
                         trans2_X_target = uot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
-                                                            X_target=X_source, param_ot=param_train,
-                                                            target_to_source=False)
+                                                         X_target=X_source, param_ot=param_train,
+                                                         target_to_source=False)
 
                     for j in range(10):
                         ic()
@@ -264,4 +264,3 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
 
     optimal_param = max(list_results, key=lambda val: val['average_precision'])
     return optimal_param
-
