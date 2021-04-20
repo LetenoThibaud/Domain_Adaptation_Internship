@@ -6,7 +6,9 @@ import pickle
 import pandas as pd
 from sklearn.model_selection import StratifiedKFold
 from sklearn.model_selection import train_test_split
+from sklearn.decomposition import PCA
 
+from baselines import *
 from optimal_transport import *
 from experimental_cv import double_cross_valid
 
@@ -27,6 +29,16 @@ def loadCsv(path):
     return data, n, d
 
 
+def parse_value_from_cvs(value):
+    try:
+        return int(value)
+    except ValueError:
+        try:
+            return float(value)
+        except ValueError:
+            return value  # the value is a string
+
+
 def import_hyperparameters(algo: str, filename="hyperparameters.csv"):
     """
     :param filename:
@@ -38,7 +50,7 @@ def import_hyperparameters(algo: str, filename="hyperparameters.csv"):
     column = imported_csv_content[algo]
     for i in range(len(column)):
         key, value = imported_csv_content[algo][i].split(",")
-        to_return[key] = value
+        to_return[key] = parse_value_from_cvs(value)
     return to_return
 
 
@@ -227,15 +239,15 @@ def pickle_to_latex(filename, type=""):
         print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
 
 
-def cross_validation_model(filename="tuned_hyperparameters.csv", parameters_file=""):
+def cross_validation_model(filename="tuned_hyperparameters.csv"):
     listParams = {
         "XGBoost": listP(
             {'max_depth': range(1, 6),
-             'eta': [10**(-i) for i in range(1, 5)],
-             'subsample': np.arange(0.1, 1, 0.1),
+             # 'eta': [10 ** (-i) for i in range(1, 5)],
+             # 'subsample': np.arange(0.1, 1, 0.1),
              # 'colsample_bytree': np.arange(0.1, 1, 0.1),
-             # 'gamma': range(0, 21),
-             'num_boost_round': range(100, 1001, 100)
+             'gamma': range(0, 21),
+             #'num_boost_round': range(100, 1001, 100)
              })
     }
 
@@ -244,22 +256,6 @@ def cross_validation_model(filename="tuned_hyperparameters.csv", parameters_file
 
     results = {}
     for dataset in ['abalone20', 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
-
-        # to speed up the computation and make it realisable, we reuse hyperparameters already tuned for the dataset
-        if parameters_file != "":
-            current_params = import_hyperparameters(dataset, parameters_file)
-            listParams = {
-                "XGBoost": listP(
-                    {'max_depth': range(1, 6),
-                     'eta': current_params['eta'],
-                     'subsample': np.arange(0.1, 1, 0.1),
-                     # 'colsample_bytree': np.arange(0.1, 1, 0.1),
-                     # 'gamma': range(0, 21),
-                     'num_boost_round': current_params['num_boost_round']
-                     })
-            }
-
-
         X, y = data_recovery(dataset)
         dataset_name = dataset
         pctPos = 100 * len(y[y == 1]) / len(y)
@@ -329,7 +325,6 @@ def cross_validation_model(filename="tuned_hyperparameters.csv", parameters_file
 
 
 def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
-
     seed = 1
     if len(argv) == 2:
         seed = int(argv[1])
@@ -339,6 +334,7 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
 
         start = time.time()
         X, y = data_recovery(dataset)
+        dataset_name = dataset
         pctPos = 100 * len(y[y == 1]) / len(y)
         dataset = "{:05.2f}%".format(pctPos) + " " + dataset
         print(dataset)
@@ -346,7 +342,7 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
         random.seed(seed)
 
         # import the tuned parameters of the model for this dataset
-        params_model = import_hyperparameters(dataset, "tuned_hyperparameters.csv")
+        params_model = import_hyperparameters(dataset_name, "hyperparameters_toy_dataset.csv")
         param_tranport = dict()
 
         # Split the dataset between the source and the target(s)
@@ -368,35 +364,47 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
             else:
                 Xtarget[np.random.choice(len(Xtarget), int(len(Xtarget) / 2)), feat] = 0
 
+        # Domain adaptation
+        if adaptation == "UOT" or adaptation == "OT":
+            # we define the parameters to cross valid
+            possible_reg_e = [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
+            possible_reg_cl = [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
+
+            if adaptation == "UOT":
+                param_to_cv = {'reg_e': possible_reg_e, 'reg_m': possible_reg_cl}
+            else:  # OT
+                param_to_cv = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
+
+            cross_val_result = ot_cross_validation(Xsource, ysource, Xtarget, params_model, param_to_cv,
+                                                   transpose_plan=transpose, ot_type=adaptation)
+
+            if adaptation == "UOT":
+                param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_m': cross_val_result['reg_m']}
+            else:  # OT
+                param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
+
+            # Unbalanced optimal transport sources to Target
+            if not transpose:
+                Xsource = ot_adaptation(Xsource, ysource, Xtarget, param_transport)
+            # Unbalanced optimal transport targets to Source
+            else:
+                Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose=True)
+        elif adaptation == "SA":
+            # cross validation
+            param_transport = {'d': sa_cross_validation(Xsource, ysource, Xtarget, params_model, transpose)}
+            # no cross validation : if we do not find the optimal dimension value by cross value
+            # we set the d the maximal possible value
+            #  param_transport = {'d': PCA().fit(Xsource).n_components_ - 1}
+            # adaptation of the sources and targets
+            Xsource, Xtarget = sa_adaptation(Xsource, Xtarget, param_transport, transpose)
+
+        # Learning and saving parameters :
         # From the source, training and test set are created
         Xtrain, Xtest, ytrain, ytest = train_test_split(Xsource, ysource,
                                                         shuffle=True,
                                                         stratify=ysource,
                                                         test_size=0.3)
 
-        # todo supprimer le if adaptation: et remplacer par :
-        #  faire un premier if pour le choix entre uot, ot et autre baselines
-        #  faire un second if pour la direction
-        if adaptation == "UOT" or adaptation == "OT":
-            # we define the parameters to cross valid
-            possible_reg_e = [0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1]  # , 1.2, 1.5, 1.7, 2, 3]
-            possible_reg_cl = [0.1, 0.3, 0.5, 0.7, 1]
-            #                 [0, 0.01, 0.03, 0.05, 0.07, 0.09, 0.1, 0.3, 0.5, 0.7, 1, 1.2, 1.5, 1.7, 2, 3]
-            param_to_cv = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
-
-            param_ot = dict
-            cross_val_result = ot_cross_validation(Xsource, ysource, Xtarget, params_model, param_to_cv,
-                                                   transpose_plan=transpose, ot_type=adaptation)
-            param_tranport = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
-
-            # Unbalanced optimal transport sources to Target
-            if not transpose:
-                Xsource = ot_adaptation(Xsource, ysource, Xtarget, param_tranport)
-            # Unbalanced optimal transport targets to Source
-            else:
-                Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_tranport, transpose=True)
-
-        # LEARNING AND SAVING PARAMETERS
         apTrain, apTest, apClean, apTarget = applyAlgo(algo, params_model,
                                                        Xtrain, ytrain,
                                                        Xtest, ytest,
@@ -430,4 +438,7 @@ if __name__ == '__main__':
     # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_t_to_s_cv_corrected.pklz",
     #     ot_direction="ts")
 
-    cross_validation_model("tuned_hyperparameters_2.csv")
+    main(sys.argv, adaptation="UOT", filename=f"./results/uot_not_transpose.pklz", transpose=False, algo="XGBoost")
+    # main(sys.argv, adaptation="UOT", filename=f"./results/uot_transpose.pklz", transpose=True, algo="XGBoost")
+    # main(sys.argv, adaptation="SA", filename=f"./results/sa_not_transpose.pklz", transpose=False, algo="XGBoost")
+    # main(sys.argv, adaptation="SA", filename=f"./results/sa_transpose.pklz", transpose=True, algo="XGBoost")

@@ -183,7 +183,7 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                     else:  # Unbalanced OT
                         trans_X_target = uot_adaptation(X_source, y_source, X_target, param_train,
                                                         transpose=True)
-
+                    ic()
                     # Get pseudo labels
                     trans_pseudo_y_target = predict_label(param_model, X_source, y_source, trans_X_target)
 
@@ -258,7 +258,7 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                     list_results.append(to_save)
         except Exception as e:
             ic()
-            print("Exception in transfer_cross_validation_trg_to_src", e)
+            print("Exception in ot_cross_validation", e)
         time.sleep(1.)  # Allow us to stop the program with ctrl-C
         nb_iteration += 1
         if to_save:
