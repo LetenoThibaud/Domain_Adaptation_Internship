@@ -4,6 +4,7 @@ import time
 import numpy as np
 import xgboost as xgb
 from sklearn.metrics import average_precision_score
+from sklearn.model_selection import train_test_split
 import itertools
 # tool to debug
 from icecream import ic
@@ -172,93 +173,99 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
         else:  # Random search
             for key in param_to_cross_valid.keys():
                 param_train[key] = param_to_cross_valid[key][np.random.randint(len(param_to_cross_valid[key]))]
-        try:
-            for i in range(nb_training_iteration):
-                ic(param_train)
-                # if we want to project the targets in the Source domain
-                if transpose_plan:
-                    # Do the first adaptation (from source to target for the plan but adapt with the transpose)
-                    if ot_type == "OT":
-                        trans_X_target = ot_adaptation(X_source, y_source, X_target, param_train, transpose=True)
-                    else:  # Unbalanced OT
-                        trans_X_target = uot_adaptation(X_source, y_source, X_target, param_train,
-                                                        transpose=True)
+        # try:
+        for i in range(nb_training_iteration):
+            ic(param_train)
+            # if we want to project the targets in the Source domain
+            if transpose_plan:
+                # Do the first adaptation (from source to target for the plan but adapt with the transpose)
+                if ot_type == "OT":
+                    trans_X_target = ot_adaptation(X_source, y_source, X_target, param_train, transpose=True)
+                else:  # Unbalanced OT
+                    trans_X_target = uot_adaptation(X_source, y_source, X_target, param_train,
+                                                    transpose=True)
+                ic()
+                # Get pseudo labels
+                trans_pseudo_y_target = predict_label(param_model, X_source, y_source, trans_X_target)
+
+                # Do the second adaptation (from target to source)
+                # We don't use target_to_source = True, instead we reverse the target and source in parameters
+                # bc we don't want to use the transpose of a plan here, just create a plan from Target to Source
+                # trans2_X_target = ot_adaptation(trans_X_target, trans_pseudo_y_target, X_source, param_train)
+                if ot_type == "OT":
+                    trans2_X_target = ot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train,
+                                                    transpose=False)
+                else:  # Unbalanced OT
+                    trans2_X_target = uot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train,
+                                                     transpose=False)
+
+                ic(len(X_target), len(trans_X_target), len(trans_pseudo_y_target), len(trans2_X_target))
+
+                for j in range(10):
                     ic()
-                    # Get pseudo labels
-                    trans_pseudo_y_target = predict_label(param_model, X_source, y_source, trans_X_target)
+                    subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
+                                                                                           trans_pseudo_y_target, p=0.5)
+                    # = train_test_split(trans2_X_target, trans_pseudo_y_target, test_size=0.5, shuffle=True)
+                    # = generateSubset2(trans2_X_target,trans_pseudo_y_target,p=0.5)
 
-                    # Do the second adaptation (from target to source)
-                    # We don't use target_to_source = True, instead we reverse the target and source in parameters
-                    # bc we don't want to use the transpose of a plan here, just create a plan from Target to Source
-                    # trans2_X_target = ot_adaptation(trans_X_target, trans_pseudo_y_target, X_source, param_train)
-                    if ot_type == "OT":
-                        trans2_X_target = ot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train)
-                    else:  # Unbalanced OT
-                        trans2_X_target = uot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train)
+                    # ic(subset_trans2_X_target)
+                    # ic(subset_trans_pseudo_y_target)
+                    y_source_pred = predict_label(param_model,
+                                                  subset_trans2_X_target,
+                                                  subset_trans_pseudo_y_target,
+                                                  X_source)
+                    precision = 100 * float(sum(y_source_pred == y_source)) / len(y_source_pred)
+                    average_precision = 100 * average_precision_score(y_source, y_source_pred)
 
-                    for j in range(10):
-                        ic()
-                        subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
-                                                                                               trans_pseudo_y_target,
-                                                                                               p=0.5)
-                        # ic(subset_trans2_X_target)
-                        # ic(subset_trans_pseudo_y_target)
-                        y_source_pred = predict_label(param_model,
-                                                      subset_trans2_X_target,
-                                                      subset_trans_pseudo_y_target,
-                                                      X_source)
-                        precision = 100 * float(sum(y_source_pred == y_source)) / len(y_source_pred)
-                        average_precision = 100 * average_precision_score(y_source, y_source_pred)
-
-                    # add results + param for this loop to the pickle
-                    to_save = dict(param_train)
-                    to_save['precision'] = precision
-                    to_save['average_precision'] = average_precision
-                    list_results.append(to_save)
-                # if we want to project the sources in the Target domain (classic method)
+                # add results + param for this loop to the pickle
+                to_save = dict(param_train)
+                to_save['precision'] = precision
+                to_save['average_precision'] = average_precision
+                list_results.append(to_save)
+            # if we want to project the sources in the Target domain (classic method)
+            else:
+                # First adaptation
+                if ot_type == "OT":
+                    trans_X_source = ot_adaptation(X_source, y_source, X_target, param_train,
+                                                   transpose=False)
                 else:
-                    # First adaptation
-                    if ot_type == "OT":
-                        trans_X_source = ot_adaptation(X_source, y_source, X_target, param_train,
-                                                       transpose=False)
-                    else:
-                        trans_X_source = uot_adaptation(X_source, y_source, X_target, param_train,
-                                                        transpose=False)
-                    # Get pseudo labels
-                    trans_pseudo_y_source = predict_label(param_model, trans_X_source, y_source, X_target)
+                    trans_X_source = uot_adaptation(X_source, y_source, X_target, param_train,
+                                                    transpose=False)
+                # Get pseudo labels
+                trans_pseudo_y_source = predict_label(param_model, trans_X_source, y_source, X_target)
 
-                    # Second adaptation
-                    if ot_type == "OT":
-                        trans2_X_target = ot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
-                                                        X_target=X_source, param_ot=param_train,
-                                                        transpose=False)
-                    else:  # Unbalanced OT
-                        trans2_X_target = uot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
-                                                         X_target=X_source, param_ot=param_train,
-                                                         transpose=False)
+                # Second adaptation
+                if ot_type == "OT":
+                    trans2_X_target = ot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
+                                                    X_target=X_source, param_ot=param_train,
+                                                    transpose=False)
+                else:  # Unbalanced OT
+                    trans2_X_target = uot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
+                                                     X_target=X_source, param_ot=param_train,
+                                                     transpose=False)
 
-                    for j in range(10):
-                        ic()
-                        subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
-                                                                                               trans_pseudo_y_source,
-                                                                                               p=0.5)
-                        # ic(subset_trans2_X_target)
-                        # ic(subset_trans_pseudo_y_target)
-                        y_source_pred = predict_label(param_model,
-                                                      subset_trans2_X_target,
-                                                      subset_trans_pseudo_y_target,
-                                                      X_source)
-                        precision = 100 * float(sum(y_source_pred == y_source)) / len(y_source_pred)
-                        average_precision = 100 * average_precision_score(y_source, y_source_pred)
+                for j in range(10):
+                    ic()
+                    subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
+                                                                                           trans_pseudo_y_source,
+                                                                                           p=0.5)
+                    # ic(subset_trans2_X_target)
+                    # ic(subset_trans_pseudo_y_target)
+                    y_source_pred = predict_label(param_model,
+                                                  subset_trans2_X_target,
+                                                  subset_trans_pseudo_y_target,
+                                                  X_source)
+                    precision = 100 * float(sum(y_source_pred == y_source)) / len(y_source_pred)
+                    average_precision = 100 * average_precision_score(y_source, y_source_pred)
 
-                    # add results + param for this loop to the pickle
-                    to_save = dict(param_train)
-                    to_save['precision'] = precision
-                    to_save['average_precision'] = average_precision
-                    list_results.append(to_save)
-        except Exception as e:
+                # add results + param for this loop to the pickle
+                to_save = dict(param_train)
+                to_save['precision'] = precision
+                to_save['average_precision'] = average_precision
+                list_results.append(to_save)
+        """except Exception as e:
             ic()
-            print("Exception in ot_cross_validation", e)
+            print("Exception in ot_cross_validation", e)"""
         time.sleep(1.)  # Allow us to stop the program with ctrl-C
         nb_iteration += 1
         if to_save:

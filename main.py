@@ -161,6 +161,7 @@ def print_pickle(filename, type=""):
         for dataset in data:
             for algo in data.get(dataset):
                 results = data[dataset][algo]
+                print(results)
                 print("Dataset:", dataset, "Algo:", algo, "Train AP {:5.2f}".format(results[0]),
                       "Test AP {:5.2f}".format(results[1]),
                       "Clean AP {:5.2f}".format(results[2]),
@@ -330,20 +331,21 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
         seed = int(argv[1])
 
     results = {}
-    for dataset in ['abalone20', 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
+    for dataset in ['abalone20', 'abalone17']:  # , 'satimage', 'abalone8']:  # ['abalone8']:  #
 
         start = time.time()
         X, y = data_recovery(dataset)
         dataset_name = dataset
         pctPos = 100 * len(y[y == 1]) / len(y)
         dataset = "{:05.2f}%".format(pctPos) + " " + dataset
+        results[dataset] = {}
         print(dataset)
         np.random.seed(seed)
         random.seed(seed)
 
         # import the tuned parameters of the model for this dataset
         params_model = import_hyperparameters(dataset_name, "hyperparameters_toy_dataset.csv")
-        param_tranport = dict()
+        param_transport = dict()
 
         # Split the dataset between the source and the target(s)
         # TODO for UOT implementation :
@@ -367,8 +369,8 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
         # Domain adaptation
         if adaptation == "UOT" or adaptation == "OT":
             # we define the parameters to cross valid
-            possible_reg_e = [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
-            possible_reg_cl = [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
+            possible_reg_e = [0.001]  # , 0.01 , 0.05, 0.1, 0.5, 1, 2, 5]
+            possible_reg_cl = [0.001, 0.01]  # , 0.05, 0.1, 0.5, 1, 2, 5]
 
             if adaptation == "UOT":
                 param_to_cv = {'reg_e': possible_reg_e, 'reg_m': possible_reg_cl}
@@ -383,12 +385,18 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
             else:  # OT
                 param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
 
-            # Unbalanced optimal transport sources to Target
+            # Transport sources to Target
             if not transpose:
-                Xsource = ot_adaptation(Xsource, ysource, Xtarget, param_transport)
+                if adaptation == "UOT":
+                    Xsource = uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+                else:  # OT
+                    Xsource = ot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
             # Unbalanced optimal transport targets to Source
             else:
-                Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose=True)
+                if adaptation == "UOT":
+                    Xtarget = uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+                else:  # OT
+                    Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
         elif adaptation == "SA":
             # cross validation
             param_transport = {'d': sa_cross_validation(Xsource, ysource, Xtarget, params_model, transpose)}
@@ -411,12 +419,12 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
                                                        Xtarget, ytarget,
                                                        Xclean)
 
-        results[dataset][algo] = (apTrain, apTest, apClean, apTarget, params_model, param_tranport,
+        results[dataset][algo] = (apTrain, apTest, apClean, apTarget, params_model, param_transport,
                                   time.time() - start)
         print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
               "Test AP {:5.2f}".format(apTest),
               "Clean AP {:5.2f}".format(apClean),
-              "Target AP {:5.2f}".format(apTarget), params_model, param_tranport,
+              "Target AP {:5.2f}".format(apTarget), params_model, param_transport,
               "in {:6.2f}s".format(time.time() - start))
 
         if not os.path.exists("results"):
@@ -438,7 +446,21 @@ if __name__ == '__main__':
     # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_t_to_s_cv_corrected.pklz",
     #     ot_direction="ts")
 
-    main(sys.argv, adaptation="UOT", filename=f"./results/uot_not_transpose.pklz", transpose=False, algo="XGBoost")
-    # main(sys.argv, adaptation="UOT", filename=f"./results/uot_transpose.pklz", transpose=True, algo="XGBoost")
-    # main(sys.argv, adaptation="SA", filename=f"./results/sa_not_transpose.pklz", transpose=False, algo="XGBoost")
-    # main(sys.argv, adaptation="SA", filename=f"./results/sa_transpose.pklz", transpose=True, algo="XGBoost")
+    """main(sys.argv, adaptation="UOT", filename=f"./results/uot_not_transpose_test.pklz", transpose=False, algo="XGBoost")
+    ic()
+    main(sys.argv, adaptation="UOT", filename=f"./results/uot_transpose_test.pklz", transpose=True, algo="XGBoost")
+    ic()"""
+    main(sys.argv, adaptation="SA", filename=f"./results/sa_not_transpose_test.pklz", transpose=False, algo="XGBoost")
+    ic()
+    main(sys.argv, adaptation="SA", filename=f"./results/sa_transpose_test.pklz", transpose=True, algo="XGBoost")
+
+    main(sys.argv, adaptation="OT", filename=f"./results/ot_not_transpose_test.pklz", transpose=False, algo="XGBoost")
+    ic()
+    main(sys.argv, adaptation="OT", filename=f"./results/ot_transpose_test.pklz", transpose=True, algo="XGBoost")
+
+    print_pickle("results/uot_not_transpose_test.pklz", "results_adapt")
+    print_pickle("results/uot_transpose_test.pklz", "results_adapt")
+    print_pickle("results/sa_not_transpose_test.pklz", "results_adapt")
+    print_pickle("results/sa_transpose_test.pklz", "results_adapt")
+    print_pickle("results/ot_not_transpose_test.pklz", "results_adapt")
+    print_pickle("results/ot_transpose_test.pklz", "results_adapt")

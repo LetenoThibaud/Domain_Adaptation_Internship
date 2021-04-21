@@ -97,6 +97,8 @@ def sa_cross_validation(X_source, y_source, X_target, param_model,
         ap_score = []
         for iFoldVal in range(nbFoldValid):
             fold_train, fold_valid = foldsTrainValid[iFoldVal]
+            ic(fold_train, fold_valid, sourceAdapted[fold_train], sourceAdapted[fold_valid])
+            ic(param_model)
             predicted_y_valid = predict_label(param_model, sourceAdapted[fold_train], y_source[fold_train],
                                               sourceAdapted[fold_valid], algo='XGBoost')
 
