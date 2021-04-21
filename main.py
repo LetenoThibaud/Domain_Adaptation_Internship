@@ -161,7 +161,6 @@ def print_pickle(filename, type=""):
         for dataset in data:
             for algo in data.get(dataset):
                 results = data[dataset][algo]
-                print(results)
                 print("Dataset:", dataset, "Algo:", algo, "Train AP {:5.2f}".format(results[0]),
                       "Test AP {:5.2f}".format(results[1]),
                       "Clean AP {:5.2f}".format(results[2]),
@@ -326,12 +325,22 @@ def cross_validation_model(filename="tuned_hyperparameters.csv"):
 
 
 def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
+    """
+
+    :param argv:
+    :param adaptation: type of adaptation wanted, default : "UOT", possible values : "JCPOT", "SA", "OT", "UOT"
+    :param filename: name of the file where results are saved
+    :param transpose: default : True (the targets are projected in the Source domain),
+    False (the sources are projected in the Target domain)
+    :param algo: algorithm to use for the learning
+    :return:
+    """
     seed = 1
     if len(argv) == 2:
         seed = int(argv[1])
 
     results = {}
-    for dataset in ['abalone20', 'abalone17']:  # , 'satimage', 'abalone8']:  # ['abalone8']:  #
+    for dataset in ['abalone20', 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
 
         start = time.time()
         X, y = data_recovery(dataset)
@@ -367,13 +376,15 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
                 Xtarget[np.random.choice(len(Xtarget), int(len(Xtarget) / 2)), feat] = 0
 
         # Domain adaptation
-        if adaptation == "UOT" or adaptation == "OT":
+        if "OT" in adaptation :
             # we define the parameters to cross valid
-            possible_reg_e = [0.001]  # , 0.01 , 0.05, 0.1, 0.5, 1, 2, 5]
-            possible_reg_cl = [0.001, 0.01]  # , 0.05, 0.1, 0.5, 1, 2, 5]
+            possible_reg_e = [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5]
+            possible_reg_cl = [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5]
 
             if adaptation == "UOT":
                 param_to_cv = {'reg_e': possible_reg_e, 'reg_m': possible_reg_cl}
+            elif adaptation == "JCPOT":
+                param_to_cv = {'reg_e': possible_reg_e}
             else:  # OT
                 param_to_cv = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
 
@@ -382,6 +393,8 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
 
             if adaptation == "UOT":
                 param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_m': cross_val_result['reg_m']}
+            elif adaptation == "JCPOT":
+                param_transport = {'reg_e': cross_val_result['reg_e']}
             else:  # OT
                 param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
 
@@ -389,12 +402,16 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
             if not transpose:
                 if adaptation == "UOT":
                     Xsource = uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+                elif adaptation == "JCPOT":
+                    Xsource = jcpot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
                 else:  # OT
                     Xsource = ot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
             # Unbalanced optimal transport targets to Source
             else:
                 if adaptation == "UOT":
                     Xtarget = uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+                elif adaptation == "JCPOT":
+                    Xtarget = jcpot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
                 else:  # OT
                     Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
         elif adaptation == "SA":
@@ -447,24 +464,16 @@ if __name__ == '__main__':
     # configure debugging tool
     ic.configureOutput(includeContext=True)
 
-    # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_with_transport_t_to_s_cv_corrected.pklz",
+    # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_ot_T.pklz",
     #     ot_direction="ts")
 
-    """main(sys.argv, adaptation="UOT", filename=f"./results/uot_not_transpose_test.pklz", transpose=False, algo="XGBoost")
-    ic()
-    main(sys.argv, adaptation="UOT", filename=f"./results/uot_transpose_test.pklz", transpose=True, algo="XGBoost")
-    ic()"""
-    main(sys.argv, adaptation="SA", filename=f"./results/sa_not_transpose_test.pklz", transpose=False, algo="XGBoost")
-    ic()
-    main(sys.argv, adaptation="SA", filename=f"./results/sa_transpose_test.pklz", transpose=True, algo="XGBoost")
+    main(sys.argv, adaptation="JCPOT", filename=f"./results/jcpot_not_transpose_test.pklz", transpose=False,
+         algo="XGBoost")
+    main(sys.argv, adaptation="JCPOT", filename=f"./results/jcpot_transpose_test.pklz", transpose=True, algo="XGBoost")
 
-    main(sys.argv, adaptation="OT", filename=f"./results/ot_not_transpose_test.pklz", transpose=False, algo="XGBoost")
-    ic()
-    main(sys.argv, adaptation="OT", filename=f"./results/ot_transpose_test.pklz", transpose=True, algo="XGBoost")
+    print_pickle("results/jcpot_not_transpose_test.pklz", "results_adapt")
+    print_pickle("results/jcpot_transpose_test.pklz", "results_adapt")
 
-    print_pickle("results/uot_not_transpose_test.pklz", "results_adapt")
-    print_pickle("results/uot_transpose_test.pklz", "results_adapt")
-    print_pickle("results/sa_not_transpose_test.pklz", "results_adapt")
-    print_pickle("results/sa_transpose_test.pklz", "results_adapt")
-    print_pickle("results/ot_not_transpose_test.pklz", "results_adapt")
-    print_pickle("results/ot_transpose_test.pklz", "results_adapt")
+    """main(sys.argv, adaptation="JCPOT", filename=f"./results/comparison_results_jcpot_T.pklz", transpose=True, algo="XGBoost")
+    main(sys.argv, adaptation="SA", filename=f"./results/comparison_results_sa_T.pklz", transpose=True, algo="XGBoost")
+    main(sys.argv, adaptation="UOT", filename=f"./results/comparison_results_uot_T.pklz", transpose=True, algo="XGBoost")"""

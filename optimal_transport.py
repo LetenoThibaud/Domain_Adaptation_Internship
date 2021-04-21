@@ -98,6 +98,34 @@ def uot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
         return transp_Xs
 
 
+def jcpot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
+    """
+    OT for multi-source target shift,
+    paper : "Optimal transport for multi-source domain adaptation under target shift" (Redko et al., 2019)
+    :param param_ot: hyperparameters of the transport
+    :param X_source: Source features
+    :param y_source: Source labels
+    :param X_target: Target features
+    :param transpose: boolean set by default to True : the X_target is transported in the Source domain
+    if False : the sources are transported in the Target domain (classic transport)
+    :return: Return the source features transported into the target if target_to_source = False
+            Return the target features transported into the source if target_to_source = True
+    """
+    # since JCPOT works with multisource data, X must be of shape K x (nk_source_samples, n_features))
+    # => special case, we need to reformat the data after each jcpot_adaptation
+    X_source = [X_source]
+    y_source = [y_source]
+    transport = ot.da.JCPOTTransport(reg_e=param_ot['reg_e'])
+    transport.fit(Xs=X_source, ys=y_source, Xt=X_target)
+    if transpose:
+        # TODO implement inverse_transform equivalence
+        transp_Xt = transport.inverse_transform(Xt=X_target)
+        return transp_Xt
+    else:
+        transp_Xs = transport.transform(Xs=X_source[0])
+        return transp_Xs
+
+
 def generateSubset2(X, Y, p):
     """
     This function should not be used on target true label because the proportion of classes are not available.
@@ -181,6 +209,8 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                 # Do the first adaptation (from source to target for the plan but adapt with the transpose)
                 if ot_type == "OT":
                     trans_X_target = ot_adaptation(X_source, y_source, X_target, param_train, transpose=True)
+                elif ot_type == "JCPOT":
+                    trans_X_target = jcpot_adaptation(X_source, y_source, X_target, param_train, transpose=True)
                 else:  # Unbalanced OT
                     trans_X_target = uot_adaptation(X_source, y_source, X_target, param_train,
                                                     transpose=True)
@@ -195,6 +225,9 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                 if ot_type == "OT":
                     trans2_X_target = ot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train,
                                                     transpose=False)
+                elif ot_type == "JCPOT":
+                    trans2_X_target = jcpot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train,
+                                                       transpose=False)
                 else:  # Unbalanced OT
                     trans2_X_target = uot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train,
                                                      transpose=False)
@@ -228,6 +261,11 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                 if ot_type == "OT":
                     trans_X_source = ot_adaptation(X_source, y_source, X_target, param_train,
                                                    transpose=False)
+                if ot_type == "JCPOT":
+                    trans_X_source = jcpot_adaptation(X_source, y_source, X_target, param_train,
+                                                   transpose=False)
+                    # since JCPOT works with multisource data, X must be of shape K x (nk_source_samples, n_features))
+                    # => special case, we need to reformat the data after each jcpot_adaptation
                 else:
                     trans_X_source = uot_adaptation(X_source, y_source, X_target, param_train,
                                                     transpose=False)
@@ -237,6 +275,10 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                 # Second adaptation
                 if ot_type == "OT":
                     trans2_X_target = ot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
+                                                    X_target=X_source, param_ot=param_train,
+                                                    transpose=False)
+                if ot_type == "JCPOT":
+                    trans2_X_target = jcpot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
                                                     X_target=X_source, param_ot=param_train,
                                                     transpose=False)
                 else:  # Unbalanced OT
@@ -249,8 +291,7 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                     subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
                                                                                            trans_pseudo_y_source,
                                                                                            p=0.5)
-                    # ic(subset_trans2_X_target)
-                    # ic(subset_trans_pseudo_y_target)
+
                     y_source_pred = predict_label(param_model,
                                                   subset_trans2_X_target,
                                                   subset_trans_pseudo_y_target,
