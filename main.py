@@ -344,7 +344,7 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
         random.seed(seed)
 
         # import the tuned parameters of the model for this dataset
-        params_model = import_hyperparameters(dataset_name, "hyperparameters_toy_dataset.csv")
+        params_model = import_hyperparameters(dataset_name, "tuned_hyperparameters_1.csv")
         param_transport = dict()
 
         # Split the dataset between the source and the target(s)
@@ -404,7 +404,11 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
             # we set the d the maximal possible value
             #  param_transport = {'d': PCA().fit(Xsource).n_components_ - 1}
             # adaptation of the sources and targets
+            original_Xsource = Xsource
             Xsource, Xtarget = sa_adaptation(Xsource, Xtarget, param_transport, transpose)
+            # We have to do "adapt" Xclean because we work one subspace, by doing the following, we get the subspace of
+            # Xclean but it is not adapted
+            _, Xclean = sa_adaptation(original_Xsource, Xclean, param_transport, transpose=False)
 
         # Learning and saving parameters :
         # From the source, training and test set are created

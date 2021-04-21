@@ -55,7 +55,6 @@ def sa_cross_validation(X_source, y_source, X_target, param_model,
     # Compute all the principal components for the two domains
     pcaS = PCA().fit(X_source)
     pcaT = PCA().fit(X_target)
-
     deviation = []
     upper_bound = []
     delta = 0.1
@@ -77,7 +76,7 @@ def sa_cross_validation(X_source, y_source, X_target, param_model,
     plt.plot(X, deviation, 'orange', label='difference in consecutive eigenvalues')
     plt.plot(X, upper_bound, 'g', label='upper bound')
     plt.legend()
-    plt.show()
+    #plt.show()
 
     # find d_max such that for all d > d_max : upper_bound > deviation
     d_max = 1
@@ -89,23 +88,23 @@ def sa_cross_validation(X_source, y_source, X_target, param_model,
     nbFoldValid = 10
     param_transport = dict()
     validParam = dict()
-    for d in range(d_max):
+    for d in range(1,d_max):
         skf = StratifiedKFold(n_splits=nbFoldValid, shuffle=True)
         param_transport["d"] = d
-        sourceAdapted, targetAdapted = sa_adaptation(X_source, X_target, param_transport, transpose)
+        sourceAdapted, targetAdapted = sa_adaptation(X_source, X_target, param_transport, transpose=False)
         foldsTrainValid = list(skf.split(sourceAdapted, y_source))
         ap_score = []
-        for iFoldVal in range(nbFoldValid):
-            fold_train, fold_valid = foldsTrainValid[iFoldVal]
-            ic(fold_train, fold_valid, sourceAdapted[fold_train], sourceAdapted[fold_valid])
-            ic(param_model)
-            predicted_y_valid = predict_label(param_model, sourceAdapted[fold_train], y_source[fold_train],
-                                              sourceAdapted[fold_valid], algo='XGBoost')
-
-            average_precision = 100 * average_precision_score(y_source[fold_valid], predicted_y_valid)
+        for i in range(10):
+            # fold_train, fold_valid = foldsTrainValid[iFoldVal]
+            # 2-fold on source examples
+            train_X, valid_X, train_y, valid_y = train_test_split(sourceAdapted, y_source, train_size=0.5, shuffle=True)
+            predicted_y_valid = predict_label(param_model, train_X, train_y, valid_X, algo='XGBoost')
+            average_precision = 100 * average_precision_score(valid_y, predicted_y_valid)
             ap_score.append(average_precision)
         validParam[d] = np.mean(ap_score)
-    d_optimal = list(validParam.keys())[list(validParam.values()).index(np.argmax(validParam.values()))]
+
+    idx_max_value = int(np.argmax(list(validParam.values())))
+    d_optimal = list(validParam.keys())[idx_max_value]
     # TODO export to csv !!
     return d_optimal
 
