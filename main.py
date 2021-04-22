@@ -340,7 +340,7 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
         seed = int(argv[1])
 
     results = {}
-    for dataset in ['abalone20', 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
+    for dataset in ['abalone20']:  #, 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
 
         start = time.time()
         X, y = data_recovery(dataset)
@@ -467,11 +467,11 @@ if __name__ == '__main__':
     # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_ot_T.pklz",
     #     ot_direction="ts")
 
-    main(sys.argv, adaptation="JCPOT", filename=f"./results/jcpot_not_transpose_test.pklz", transpose=False,
-         algo="XGBoost")
+    # main(sys.argv, adaptation="JCPOT", filename=f"./results/jcpot_not_transpose_test.pklz", transpose=False,
+    #     algo="XGBoost")
     main(sys.argv, adaptation="JCPOT", filename=f"./results/jcpot_transpose_test.pklz", transpose=True, algo="XGBoost")
 
-    print_pickle("results/jcpot_not_transpose_test.pklz", "results_adapt")
+    #print_pickle("results/jcpot_not_transpose_test.pklz", "results_adapt")
     print_pickle("results/jcpot_transpose_test.pklz", "results_adapt")
 
     """main(sys.argv, adaptation="JCPOT", filename=f"./results/comparison_results_jcpot_T.pklz", transpose=True, algo="XGBoost")

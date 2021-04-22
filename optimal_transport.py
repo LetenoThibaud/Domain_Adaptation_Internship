@@ -6,6 +6,7 @@ import xgboost as xgb
 from sklearn.metrics import average_precision_score
 from sklearn.model_selection import train_test_split
 import itertools
+import sys
 # tool to debug
 from icecream import ic
 
@@ -98,6 +99,14 @@ def uot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
         return transp_Xs
 
 
+def jcpot_inverse_transport(transport, X_source):
+    # adaptation of the code inverse_transport from POT : Python Optimal Transport
+    mapping = transport.coupling_[0].T / np.sum(transport.coupling_[0], 0)[:, None]
+    mapping[~ np.isfinite(mapping)] = 0
+    transported_Xt = np.dot(mapping, X_source[0])
+    return transported_Xt
+
+
 def jcpot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
     """
     OT for multi-source target shift,
@@ -118,8 +127,7 @@ def jcpot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
     transport = ot.da.JCPOTTransport(reg_e=param_ot['reg_e'])
     transport.fit(Xs=X_source, ys=y_source, Xt=X_target)
     if transpose:
-        # TODO implement inverse_transform equivalence
-        transp_Xt = transport.inverse_transform(Xt=X_target)
+        transp_Xt = jcpot_inverse_transport(transport, X_source)
         return transp_Xt
     else:
         transp_Xs = transport.transform(Xs=X_source[0])
