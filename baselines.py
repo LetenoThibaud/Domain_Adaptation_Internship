@@ -2,6 +2,7 @@ from optimal_transport import *
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 from sklearn.model_selection import StratifiedKFold
+from scipy.linalg import sqrtm
 from main import applyAlgo
 
 
@@ -108,4 +109,61 @@ def sa_cross_validation(X_source, y_source, X_target, param_model,
     # TODO export to csv !!
     return d_optimal
 
-# -------------  -------------#
+
+# -------------CORAL (CORelation ALignment)-------------#
+def coral_adaptation(X_source, X_target, transpose=True):
+    """
+
+    :param X_source:
+    :param X_target:
+    :param transpose:
+    :return:
+    """
+    # Classic CORAL adaptation (align the source distribution to the target one)
+    if not transpose:
+        Cs = np.cov(X_source, rowvar=False) + np.eye(X_source.shape[1])
+        Ct = np.cov(X_target, rowvar=False) + np.eye(X_target.shape[1])
+        Ds = X_source.dot(np.linalg.inv(np.real(sqrtm(Cs))))            # whitening source
+        Ds = Ds.dot(np.real(sqrtm(Ct)))                                 # re-coloring with target covariance
+        adapted_source = Ds
+        adapted_target = X_target                                       # target remained unchanged
+        return adapted_source, adapted_target
+    # CORAL adaptation from Target to Source (align the target distribution to the source one)
+    else:
+        Cs = np.cov(X_source, rowvar=False) + np.eye(X_source.shape[1])
+        Ct = np.cov(X_target, rowvar=False) + np.eye(X_target.shape[1])
+        Dt = X_target.dot(np.linalg.inv(np.real(sqrtm(Ct))))            # whitening target
+        Dt = Dt.dot(np.real(sqrtm(Cs)))                                 # re-coloring with source covariance
+        adapted_source = X_source                                       # source remained unchanged
+        adapted_target = Dt
+        return adapted_source, adapted_target
+
+
+def tca_adaptation(X_source, X_target, param):
+    # Note that there is no difference between the classic transport
+    # and the solution where we aim at transporting the targets
+    # into the source domain for this baseline, both the targets and
+    # the sources are transported in an extra subspace
+    d = param["d"]  # subspace dimension
+    Ns = X_source.shape[0]
+    Nt = X_target.shape[0]
+    # L = [Lij] >= 0
+    L_ss = (1. / (Ns * Ns)) * np.full((Ns, Ns), 1)
+    L_st = (-1. / (Ns * Nt)) * np.full((Ns, Nt), 1)
+    L_ts = (-1. / (Nt * Ns)) * np.full((Nt, Ns), 1)
+    L_tt = (1. / (Nt * Nt)) * np.full((Nt, Nt), 1)
+    L_up = np.hstack((L_ss, L_st))
+    L_down = np.hstack((L_ts, L_tt))
+    L = np.vstack((L_up, L_down))
+    # K the kernel map
+    X = np.vstack((X_source, X_target))
+    K = np.dot(X, X.T)  # linear kernel
+    # H the centering matrix
+    H = (np.identity(Ns + Nt) - 1. / (Ns + Nt) * np.ones((Ns + Nt, 1)) *
+         np.ones((Ns + Nt, 1)).T)
+    inv = np.linalg.pinv(np.identity(Ns + Nt) + K.dot(L).dot(K))
+    D, W = np.linalg.eigh(inv.dot(K).dot(H).dot(K))
+    W = W[:, np.argsort(-D)[:d]]  # eigenvectors of d highest eigenvalues
+    sourceAdapted = np.dot(K[:Ns, :], W)  # project source
+    targetAdapted = np.dot(K[Ns:, :], W)  # project target
+    return sourceAdapted, targetAdapted

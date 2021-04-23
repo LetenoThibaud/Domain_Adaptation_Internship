@@ -247,7 +247,7 @@ def cross_validation_model(filename="tuned_hyperparameters.csv"):
              # 'subsample': np.arange(0.1, 1, 0.1),
              # 'colsample_bytree': np.arange(0.1, 1, 0.1),
              'gamma': range(0, 21),
-             #'num_boost_round': range(100, 1001, 100)
+             # 'num_boost_round': range(100, 1001, 100)
              })
     }
 
@@ -328,7 +328,8 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
     """
 
     :param argv:
-    :param adaptation: type of adaptation wanted, default : "UOT", possible values : "JCPOT", "SA", "OT", "UOT"
+    :param adaptation: type of adaptation wanted, default : "UOT",
+                        possible values : "JCPOT", "SA", "OT", "UOT", "CORAL"
     :param filename: name of the file where results are saved
     :param transpose: default : True (the targets are projected in the Source domain),
     False (the sources are projected in the Target domain)
@@ -340,20 +341,20 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
         seed = int(argv[1])
 
     results = {}
-    for dataset in ['abalone20']:  #, 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
+    for dataset in ['abalone20']:  # , 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
 
         start = time.time()
         X, y = data_recovery(dataset)
         dataset_name = dataset
         pctPos = 100 * len(y[y == 1]) / len(y)
         dataset = "{:05.2f}%".format(pctPos) + " " + dataset
-        results[dataset] = {}
+        results[adaptation] = {}
         print(dataset)
         np.random.seed(seed)
         random.seed(seed)
 
         # import the tuned parameters of the model for this dataset
-        params_model = import_hyperparameters(dataset_name, "tuned_hyperparameters_1.csv")
+        params_model = import_hyperparameters(dataset_name, "hyperparameters_toy_dataset.csv")
         param_transport = dict()
 
         # Split the dataset between the source and the target(s)
@@ -361,6 +362,7 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
         #  create unbalance during the split between source and target !
         Xsource, Xtarget, ysource, ytarget = train_test_split(X, y, shuffle=True,
                                                               stratify=y,
+                                                              random_state=1234,
                                                               test_size=0.51)
         # Keep a clean backup of Xtarget before degradation.
         Xclean = Xtarget.copy()
@@ -376,7 +378,7 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
                 Xtarget[np.random.choice(len(Xtarget), int(len(Xtarget) / 2)), feat] = 0
 
         # Domain adaptation
-        if "OT" in adaptation :
+        if "OT" in adaptation:
             # we define the parameters to cross valid
             possible_reg_e = [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5]
             possible_reg_cl = [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5]
@@ -426,11 +428,20 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
             # We have to do "adapt" Xclean because we work one subspace, by doing the following, we get the subspace of
             # Xclean but it is not adapted
             _, Xclean = sa_adaptation(original_Xsource, Xclean, param_transport, transpose=False)
+        elif adaptation == "CORAL":
+            # original_Xsource = Xsource
+            Xsource, Xtarget = sa_adaptation(Xsource, Xtarget, transpose)
+            # TODO test and remove if useless
+            # We have to do "adapt" Xclean because we work one subspace, by doing the following, we get the subspace of
+            # Xclean but it is not adapted
+            # _, Xclean = sa_adaptation(original_Xsource, Xclean, transpose=False)
+
 
         # Learning and saving parameters :
         # From the source, training and test set are created
         Xtrain, Xtest, ytrain, ytest = train_test_split(Xsource, ysource,
                                                         shuffle=True,
+                                                        random_state=3456,
                                                         stratify=ysource,
                                                         test_size=0.3)
 
@@ -440,8 +451,8 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
                                                        Xtarget, ytarget,
                                                        Xclean)
 
-        results[dataset][algo] = (apTrain, apTest, apClean, apTarget, params_model, param_transport,
-                                  time.time() - start)
+        results[adaptation][algo] = (apTrain, apTest, apClean, apTarget, params_model, param_transport,
+                                     time.time() - start)
         print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
               "Test AP {:5.2f}".format(apTest),
               "Clean AP {:5.2f}".format(apClean),
@@ -469,10 +480,30 @@ if __name__ == '__main__':
 
     # main(sys.argv, adaptation="JCPOT", filename=f"./results/jcpot_not_transpose_test.pklz", transpose=False,
     #     algo="XGBoost")
-    main(sys.argv, adaptation="JCPOT", filename=f"./results/jcpot_transpose_test.pklz", transpose=True, algo="XGBoost")
 
-    #print_pickle("results/jcpot_not_transpose_test.pklz", "results_adapt")
-    print_pickle("results/jcpot_transpose_test.pklz", "results_adapt")
+    # WARNING MODIFICATION OF :
+    # - the dataset
+    # - the seed lines 362 and 432
+    # - the dataset value saved in the pickle lines 350 and 445
+    # for the following tests
+    main(sys.argv, adaptation="UOT", filename=f"./results/abalone20_global_compare_uot.pklz", transpose=True,
+         algo="XGBoost")
+
+    """
+    main(sys.argv, adaptation="JCPOT", filename=f"./results/abalone20_global_compare_jcpot.pklz", transpose=True,
+         algo="XGBoost")
+    main(sys.argv, adaptation="OT", filename=f"./results/abalone20_global_compare.pklz", transpose=True,
+         algo="XGBoost")
+    main(sys.argv, adaptation="SA", filename=f"./results/abalone20_global_compare.pklz", transpose=True,
+         algo="XGBoost")"""
+
+    # print_pickle("results/jcpot_not_transpose_test.pklz", "results_adapt")
+    # print_pickle("results/jcpot_transpose_test.pklz", "results_adapt")
+    # print_pickle("results/ot_transpose_test.pklz", "results_adapt")
+    # print_pickle("results/sa_transpose_test.pklz", "results_adapt")
+    print_pickle("results/abalone20_global_compare_uot.pklz", "results_adapt")
+    print_pickle("results/abalone20_global_compare_jcpot.pklz", "results_adapt")
+    print_pickle("results/abalone20_global_compare.pklz", "results_adapt")
 
     """main(sys.argv, adaptation="JCPOT", filename=f"./results/comparison_results_jcpot_T.pklz", transpose=True, algo="XGBoost")
     main(sys.argv, adaptation="SA", filename=f"./results/comparison_results_sa_T.pklz", transpose=True, algo="XGBoost")
