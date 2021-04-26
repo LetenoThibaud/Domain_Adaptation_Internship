@@ -10,6 +10,8 @@ import sys
 # tool to debug
 from icecream import ic
 
+from reweighted_uot import WeightedUnbalancedSinkhornTransport
+
 
 def objective_AP(preds, dtrain):
     labels = dtrain.get_label()
@@ -98,16 +100,15 @@ def uot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
         return transp_Xs
 
 
-"""def reweighted_uot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
-    transport = ot.da.UnbalancedSinkhornTransport(reg_e=param_ot['reg_e'], reg_m=param_ot['reg_m'])
-    # default use sinkhorn_knopp_unbalanced
+def reweighted_uot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
+    transport = WeightedUnbalancedSinkhornTransport(reg_e=param_ot['reg_e'], reg_m=param_ot['reg_m'])
     transport.fit(Xs=X_source, ys=y_source, Xt=X_target)
     if transpose:
         transp_Xt = transport.inverse_transform(Xt=X_target)
         return transp_Xt
     else:
         transp_Xs = transport.transform(Xs=X_source)
-        return transp_Xs"""
+        return transp_Xs
 
 
 def jcpot_inverse_transport(transport, X_source):
@@ -233,6 +234,9 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                     trans_X_target = ot_adaptation(X_source, y_source, X_target, param_train, transpose=True)
                 elif ot_type == "JCPOT":
                     trans_X_target = jcpot_adaptation(X_source, y_source, X_target, param_train, transpose=True)
+                elif ot_type == "reweight_UOT":
+                    trans_X_target = reweighted_uot_adaptation(X_source, y_source, X_target, param_train,
+                                                               transpose=True)
                 else:  # Unbalanced OT
                     trans_X_target = uot_adaptation(X_source, y_source, X_target, param_train,
                                                     transpose=True)
@@ -259,6 +263,9 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                 elif ot_type == "JCPOT":
                     trans2_X_target = jcpot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train,
                                                        transpose=False)
+                elif ot_type == "reweight_UOT":
+                    trans2_X_target = reweighted_uot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train,
+                                                                transpose=False)
                 else:  # Unbalanced OT
                     trans2_X_target = uot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train,
                                                      transpose=False)
@@ -297,6 +304,9 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                                                       transpose=False)
                     # since JCPOT works with multisource data, X must be of shape K x (nk_source_samples, n_features))
                     # => special case, we need to reformat the data after each jcpot_adaptation
+                elif ot_type == "reweight_UOT":
+                    trans_X_source = reweighted_uot_adaptation(X_source, y_source, X_target, param_train,
+                                                               transpose=False)
                 else:
                     trans_X_source = uot_adaptation(X_source, y_source, X_target, param_train,
                                                     transpose=False)
@@ -322,6 +332,10 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                     trans2_X_target = jcpot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
                                                        X_target=X_source, param_ot=param_train,
                                                        transpose=False)
+                elif ot_type == "reweight_UOT":
+                    trans2_X_target = reweighted_uot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
+                                                                X_target=X_source, param_ot=param_train,
+                                                                transpose=False)
                 else:  # Unbalanced OT
                     trans2_X_target = uot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
                                                      X_target=X_source, param_ot=param_train,

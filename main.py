@@ -10,7 +10,7 @@ from sklearn.decomposition import PCA
 
 from baselines import *
 from optimal_transport import *
-from experimental_cv import expe_main, reweighted_uot_adaptation
+from reweighted_uot import expe_main, reweighted_uot_adaptation
 
 
 def loadCsv(path):
@@ -330,11 +330,15 @@ def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model,
         # we define the parameters to cross valid
         possible_reg_e = [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5]
         possible_reg_cl = [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5]
+        possible_weighted_reg_m = [{"0": 2, "1": 1}, {"0": 5, "1": 1}, {"0": 10, "1": 1}, {"0": 20, "1": 1},
+                                   {"0": 50, "1": 1}, {"0": 100, "1": 1}, {"0": 200, "1": 1}]
 
         if adaptation == "UOT":
             param_to_cv = {'reg_e': possible_reg_e, 'reg_m': possible_reg_cl}
         elif adaptation == "JCPOT":
             param_to_cv = {'reg_e': possible_reg_e}
+        elif adaptation == "reweight_UOT":
+            param_to_cv = {'reg_e': possible_reg_e, 'reg_m': possible_weighted_reg_m}
         else:  # OT
             param_to_cv = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
 
@@ -344,15 +348,19 @@ def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model,
             param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_m': cross_val_result['reg_m']}
         elif adaptation == "JCPOT":
             param_transport = {'reg_e': cross_val_result['reg_e']}
+        elif adaptation == "reweight_UOT":
+            param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_m': cross_val_result['reg_m']}
         else:  # OT
             param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
         return param_transport
     elif adaptation == "SA":
-        return {'d': components_analysis_based_method_cross_validation(Xsource, ysource, Xtarget, params_model)}
+        return {'d': components_analysis_based_method_cross_validation(Xsource, ysource, Xtarget, params_model,
+                                                                       transport_type="SA")}
     elif adaptation == "CORAL":
         return dict()  # equivalent to null but avoid crash later
     elif adaptation == "TCA":
-        return {'d': 2}  # TODO implement cross validation for TCA
+        return {'d': components_analysis_based_method_cross_validation(Xsource, ysource, Xtarget, params_model,
+                                                                       transport_type="TCA")}
 
 
 def adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose, adaptation):
@@ -363,6 +371,8 @@ def adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose, 
                 Xsource = uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
             elif adaptation == "JCPOT":
                 Xsource = jcpot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+            elif adaptation == "reweight_UOT":
+                Xsource = reweighted_uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
             else:  # OT
                 Xsource = ot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
         # Unbalanced optimal transport targets to Source
@@ -371,6 +381,8 @@ def adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose, 
                 Xtarget = uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
             elif adaptation == "JCPOT":
                 Xtarget = jcpot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+            elif adaptation == "reweight_UOT":
+                Xtarget = reweighted_uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
             else:  # OT
                 Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
     elif adaptation == "SA":
@@ -391,8 +403,43 @@ def adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose, 
     return Xsource, Xtarget, Xclean
 
 
-def train_model():
-    pass
+def train_model(X_source, y_source, X_target, y_target, X_clean, params_model, algo="XGBoost"):
+    Xtrain, Xtest, ytrain, ytest = train_test_split(X_source, y_source,
+                                                    shuffle=True,
+                                                    stratify=y_source,
+                                                    test_size=0.3)
+
+    apTrain, apTest, apClean, apTarget = applyAlgo(algo, params_model,
+                                                   Xtrain, ytrain,
+                                                   Xtest, ytest,
+                                                   X_target, y_target,
+                                                   X_clean)
+
+    return apTrain, apTest, apClean, apTarget
+
+
+def save_results(adaptation, dataset, algo, apTrain, apTest, apClean, apTarget, params_model, param_transport, start,
+                 filename, results):
+    results[adaptation][algo] = (apTrain, apTest, apClean, apTarget, params_model, param_transport,
+                                 time.time() - start)
+
+    print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
+          "Test AP {:5.2f}".format(apTest),
+          "Clean AP {:5.2f}".format(apClean),
+          "Target AP {:5.2f}".format(apTarget), params_model, param_transport,
+          "in {:6.2f}s".format(time.time() - start))
+
+    if not os.path.exists("results"):
+        try:
+            os.makedirs("results")
+        except:
+            pass
+    if filename == "":
+        filename = f"./results/" + dataset + adaptation + algo + ".pklz"
+    f = gzip.open(filename, "wb")
+    pickle.dump(results, f)
+    f.close()
+    return results
 
 
 def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
@@ -430,8 +477,6 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
         param_transport = dict()
 
         # Split the dataset between the source and the target(s)
-        # TODO for UOT implementation :
-        #  create unbalance during the split between source and target !
         Xsource, Xtarget, ysource, ytarget = train_test_split(X, y, shuffle=True,
                                                               stratify=y,
                                                               random_state=1234,
@@ -503,9 +548,77 @@ if __name__ == '__main__':
     #  - the dataset value saved in the pickle lines 350 and 445
     #  for the tests : TO REVERSE
 
-    """print_pickle("results/abalone20_global_compare_uot.pklz", "results_adapt")
-    print_pickle("results/abalone20_global_compare_jcpot.pklz", "results_adapt")
-    print_pickle("results/abalone20_global_compare_sa.pklz", "results_adapt")
-    print_pickle("results/abalone20_global_compare_tca.pklz", "results_adapt")
-    print_pickle("results/abalone20_global_compare_coral.pklz", "results_adapt")
-    print_pickle("results/abalone20_global_compare_ot.pklz", "results_adapt")"""
+    seed = 1
+    algo = "XGBoost"
+    results = {}
+    filename = "results/experimental_reweighted_uot.pklz"
+    for dataset in ['abalone20']:  # , 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
+
+        start = time.time()
+        X, y = data_recovery(dataset)
+        dataset_name = dataset
+        pctPos = 100 * len(y[y == 1]) / len(y)
+        dataset = "{:05.2f}%".format(pctPos) + " " + dataset
+        results["expe"] = {}
+        print(dataset)
+        np.random.seed(seed)
+        random.seed(seed)
+
+        # import the tuned parameters of the model for this dataset
+        params_model = import_hyperparameters(dataset_name, "hyperparameters_toy_dataset.csv")
+        param_transport = dict()
+
+        # Split the dataset between the source and the target(s)
+        # TODO for UOT implementation :
+        #  create unbalance during the split between source and target !
+        Xsource, Xtarget, ysource, ytarget = train_test_split(X, y, shuffle=True,
+                                                              stratify=y,
+                                                              random_state=1234,
+                                                              test_size=0.51)
+        # Keep a clean backup of Xtarget before degradation.
+        Xclean = Xtarget.copy()
+        # for loop -> degradation of the target
+        # 3 features are deteriorated : the 2nd, the 3rd and the 4th
+        for feat, coef in [(2, 0.1), (3, 10), (4, 0)]:
+            # for features 2 and 3, their values are multiplied by a coefficient
+            # resp. 0.1 and 10
+            if coef != 0:
+                Xtarget[:, feat] = Xtarget[:, feat] * coef
+            # for feature 4, some of its values are (randomly) set to 0
+            else:
+                Xtarget[np.random.choice(len(Xtarget), int(len(Xtarget) / 2)), feat] = 0
+
+        param_transport = {'reg_e': 0.5, 'reg_m': 0.1}
+        Xtarget = reweighted_uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose=True)
+
+
+        Xtrain, Xtest, ytrain, ytest = train_test_split(Xsource, ysource,
+                                                        shuffle=True,
+                                                        random_state=3456,
+                                                        stratify=ysource,
+                                                        test_size=0.3)
+
+        apTrain, apTest, apClean, apTarget = applyAlgo(algo, params_model,
+                                                       Xtrain, ytrain,
+                                                       Xtest, ytest,
+                                                       Xtarget, ytarget,
+                                                       Xclean)
+
+        results["expe"][algo] = (apTrain, apTest, apClean, apTarget, params_model, param_transport,
+                                 time.time() - start)
+        print(dataset, "expe", "Train AP {:5.2f}".format(apTrain),
+              "Test AP {:5.2f}".format(apTest),
+              "Clean AP {:5.2f}".format(apClean),
+              "Target AP {:5.2f}".format(apTarget), params_model, param_transport,
+              "in {:6.2f}s".format(time.time() - start))
+
+        if not os.path.exists("results"):
+            try:
+                os.makedirs("results")
+            except:
+                pass
+        if filename == "":
+            filename = f"./results/res{seed}.pklz"
+        f = gzip.open(filename, "wb")
+        pickle.dump(results, f)
+        f.close()
