@@ -1,18 +1,23 @@
 # List of packages required for the project
 
 Packages :
-- csv  
-- pandas
-- sklearn.model_selection (StratifiedKFold, train_test_split, HalvingGridSearchCV) 
+
+- csv 
+- gzip 
+- icecream
+- itertools
+- matplotlib.pyplot
+- numpy
 - ot
 - os
-- gzip
+- pandas
 - pickle
 - random
-- time 
-- numpy
-- xgboost
+- scipy.linalg
+- sklearn.decomposition
 - sklearn.metrics
-- itertools
-- icecream
+- sklearn.model_selection (StratifiedKFold, train_test_split, HalvingGridSearchCV) 
+- time  
+- warnings
+- xgboost
 
