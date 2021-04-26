@@ -43,7 +43,6 @@ def predict_label(param, X_train, y_train, X_eval, algo='XGBoost'):
                         verbose_eval=False)
         prediction = bst.predict(d_eval)
 
-        # TODO check the validity of this method !!
         labels = np.array(prediction) > 0.5
         labels = labels.astype(int)
 
@@ -97,6 +96,18 @@ def uot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
     else:
         transp_Xs = transport.transform(Xs=X_source)
         return transp_Xs
+
+
+"""def reweighted_uot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
+    transport = ot.da.UnbalancedSinkhornTransport(reg_e=param_ot['reg_e'], reg_m=param_ot['reg_m'])
+    # default use sinkhorn_knopp_unbalanced
+    transport.fit(Xs=X_source, ys=y_source, Xt=X_target)
+    if transpose:
+        transp_Xt = transport.inverse_transform(Xt=X_target)
+        return transp_Xt
+    else:
+        transp_Xs = transport.transform(Xs=X_source)
+        return transp_Xs"""
 
 
 def jcpot_inverse_transport(transport, X_source):
@@ -174,7 +185,7 @@ def create_grid_search_ot(params: dict):
 
 def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cross_valid,
                         transpose_plan=True, ot_type="UOT",
-                        duration_max=24, nb_training_iteration=10, gridsearch=True):
+                        duration_max=24, nb_training_iteration=8, gridsearch=True):
     """
     find the best hyperparameters for an optimal transport
     :param X_source:
@@ -242,7 +253,7 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
 
                 ic(len(X_target), len(trans_X_target), len(trans_pseudo_y_target), len(trans2_X_target))
 
-                for j in range(10):
+                for j in range(8):
                     ic()
                     subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
                                                                                            trans_pseudo_y_target, p=0.5)
@@ -294,7 +305,7 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                                                      X_target=X_source, param_ot=param_train,
                                                      transpose=False)
 
-                for j in range(10):
+                for j in range(8):
                     ic()
                     subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
                                                                                            trans_pseudo_y_source,

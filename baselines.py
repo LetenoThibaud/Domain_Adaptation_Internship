@@ -40,10 +40,12 @@ def sa_adaptation(X_source, X_target, param_transport, transpose=True):
     return sourceAdapted, targetAdapted
 
 
-def sa_cross_validation(X_source, y_source, X_target, param_model,
-                        transpose=True):
+def components_analysis_based_method_cross_validation(X_source, y_source, X_target, param_model, transport_type="SA",
+                                                      algo='XGBoost'):
     """
-    We tune the subspace dimensionality d.
+    Tune the subspace dimensionality parameter d.
+    :param transport_type:
+    :param algo:
     :param X_source:
     :param y_source:
     :param X_target:
@@ -52,7 +54,7 @@ def sa_cross_validation(X_source, y_source, X_target, param_model,
     :param nb_training_iteration:
     :return:
     """
-
+    # Seach for the the max value of d we want to consider as best parameter
     # Compute all the principal components for the two domains
     pcaS = PCA().fit(X_source)
     pcaT = PCA().fit(X_target)
@@ -77,43 +79,45 @@ def sa_cross_validation(X_source, y_source, X_target, param_model,
     plt.plot(X, deviation, 'orange', label='difference in consecutive eigenvalues')
     plt.plot(X, upper_bound, 'g', label='upper bound')
     plt.legend()
-    #plt.show()
+    # plt.show()
 
     # find d_max such that for all d > d_max : upper_bound > deviation
     d_max = 1
     for i in range(pcaS.n_features_ - 1):
         if deviation[i] >= upper_bound[i]:
             d_max = i + 1
+
+    # Test the quality of d for all d in [1; d_max] by testing it on the source
     # paper : consider the subspaces of dim d=1:dmax and select d* that minimizes the classification error
     #        using a 2-fold CV (on X_source)
     nbFoldValid = 10
     param_transport = dict()
     validParam = dict()
-    for d in range(1,d_max):
+    for d in range(1, d_max):
         skf = StratifiedKFold(n_splits=nbFoldValid, shuffle=True)
         param_transport["d"] = d
-        sourceAdapted, targetAdapted = sa_adaptation(X_source, X_target, param_transport, transpose=False)
-        foldsTrainValid = list(skf.split(sourceAdapted, y_source))
+        if transport_type == "TCA":
+            sourceAdapted, targetAdapted = tca_adaptation(X_source, X_target, param_transport)
+        else:  # transport_type == "SA"
+            sourceAdapted, targetAdapted = sa_adaptation(X_source, X_target, param_transport, transpose=False)
         ap_score = []
         for i in range(10):
             # fold_train, fold_valid = foldsTrainValid[iFoldVal]
             # 2-fold on source examples
             train_X, valid_X, train_y, valid_y = train_test_split(sourceAdapted, y_source, train_size=0.5, shuffle=True)
-            predicted_y_valid = predict_label(param_model, train_X, train_y, valid_X, algo='XGBoost')
+            predicted_y_valid = predict_label(param_model, train_X, train_y, valid_X, algo)
             average_precision = 100 * average_precision_score(valid_y, predicted_y_valid)
             ap_score.append(average_precision)
         validParam[d] = np.mean(ap_score)
 
     idx_max_value = int(np.argmax(list(validParam.values())))
     d_optimal = list(validParam.keys())[idx_max_value]
-    # TODO export to csv !!
     return d_optimal
 
 
 # -------------CORAL (CORelation ALignment)-------------#
 def coral_adaptation(X_source, X_target, transpose=True):
     """
-
     :param X_source:
     :param X_target:
     :param transpose:
@@ -123,22 +127,23 @@ def coral_adaptation(X_source, X_target, transpose=True):
     if not transpose:
         Cs = np.cov(X_source, rowvar=False) + np.eye(X_source.shape[1])
         Ct = np.cov(X_target, rowvar=False) + np.eye(X_target.shape[1])
-        Ds = X_source.dot(np.linalg.inv(np.real(sqrtm(Cs))))            # whitening source
-        Ds = Ds.dot(np.real(sqrtm(Ct)))                                 # re-coloring with target covariance
+        Ds = X_source.dot(np.linalg.inv(np.real(sqrtm(Cs))))  # whitening source
+        Ds = Ds.dot(np.real(sqrtm(Ct)))  # re-coloring with target covariance
         adapted_source = Ds
-        adapted_target = X_target                                       # target remained unchanged
+        adapted_target = X_target  # target remained unchanged
         return adapted_source, adapted_target
     # CORAL adaptation from Target to Source (align the target distribution to the source one)
     else:
         Cs = np.cov(X_source, rowvar=False) + np.eye(X_source.shape[1])
         Ct = np.cov(X_target, rowvar=False) + np.eye(X_target.shape[1])
-        Dt = X_target.dot(np.linalg.inv(np.real(sqrtm(Ct))))            # whitening target
-        Dt = Dt.dot(np.real(sqrtm(Cs)))                                 # re-coloring with source covariance
-        adapted_source = X_source                                       # source remained unchanged
+        Dt = X_target.dot(np.linalg.inv(np.real(sqrtm(Ct))))  # whitening target
+        Dt = Dt.dot(np.real(sqrtm(Cs)))  # re-coloring with source covariance
+        adapted_source = X_source  # source remained unchanged
         adapted_target = Dt
         return adapted_source, adapted_target
 
 
+# -------------TCA (Transport Components Analysis)------------- #
 def tca_adaptation(X_source, X_target, param):
     # Note that there is no difference between the classic transport
     # and the solution where we aim at transporting the targets

@@ -10,7 +10,7 @@ from sklearn.decomposition import PCA
 
 from baselines import *
 from optimal_transport import *
-from experimental_cv import double_cross_valid
+from experimental_cv import expe_main, reweighted_uot_adaptation
 
 
 def loadCsv(path):
@@ -324,7 +324,78 @@ def cross_validation_model(filename="tuned_hyperparameters.csv"):
         export_hyperparameters(dataset_name, param, filename)
 
 
-def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
+def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model,
+                                transpose=True, adaptation="UOT"):
+    if "OT" in adaptation:
+        # we define the parameters to cross valid
+        possible_reg_e = [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5]
+        possible_reg_cl = [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5]
+
+        if adaptation == "UOT":
+            param_to_cv = {'reg_e': possible_reg_e, 'reg_m': possible_reg_cl}
+        elif adaptation == "JCPOT":
+            param_to_cv = {'reg_e': possible_reg_e}
+        else:  # OT
+            param_to_cv = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
+
+        cross_val_result = ot_cross_validation(Xsource, ysource, Xtarget, params_model, param_to_cv,
+                                               transpose_plan=transpose, ot_type=adaptation)
+        if adaptation == "UOT":
+            param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_m': cross_val_result['reg_m']}
+        elif adaptation == "JCPOT":
+            param_transport = {'reg_e': cross_val_result['reg_e']}
+        else:  # OT
+            param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
+        return param_transport
+    elif adaptation == "SA":
+        return {'d': components_analysis_based_method_cross_validation(Xsource, ysource, Xtarget, params_model)}
+    elif adaptation == "CORAL":
+        return dict()  # equivalent to null but avoid crash later
+    elif adaptation == "TCA":
+        return {'d': 2}  # TODO implement cross validation for TCA
+
+
+def adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose, adaptation):
+    if "OT" in adaptation:
+        # Transport sources to Target
+        if not transpose:
+            if adaptation == "UOT":
+                Xsource = uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+            elif adaptation == "JCPOT":
+                Xsource = jcpot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+            else:  # OT
+                Xsource = ot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+        # Unbalanced optimal transport targets to Source
+        else:
+            if adaptation == "UOT":
+                Xtarget = uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+            elif adaptation == "JCPOT":
+                Xtarget = jcpot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+            else:  # OT
+                Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+    elif adaptation == "SA":
+        original_Xsource = Xsource
+        Xsource, Xtarget = sa_adaptation(Xsource, Xtarget, param_transport, transpose)
+        # We have to do "adapt" Xclean because we work one subspace, by doing the following, we get the subspace of
+        # Xclean but it is not adapted
+        _, Xclean = sa_adaptation(original_Xsource, Xclean, param_transport, transpose=False)
+    elif adaptation == "CORAL":
+        # original_Xsource = Xsource
+        Xsource, Xtarget = coral_adaptation(Xsource, Xtarget, transpose)
+    elif adaptation == "TCA":
+        # original_Xsource = Xsource
+        param_transport = {'d': 2}
+        original_Xtarget = Xtarget
+        Xsource, Xtarget = tca_adaptation(Xsource, Xtarget, param_transport)
+        Xclean, _ = tca_adaptation(Xclean, original_Xtarget, param_transport)
+    return Xsource, Xtarget, Xclean
+
+
+def train_model():
+    pass
+
+
+def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
     """
 
     :param argv:
@@ -341,6 +412,7 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
         seed = int(argv[1])
 
     results = {}
+
     for dataset in ['abalone20']:  # , 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
 
         start = time.time()
@@ -377,65 +449,15 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
             else:
                 Xtarget[np.random.choice(len(Xtarget), int(len(Xtarget) / 2)), feat] = 0
 
+        # Tune the hyperparameters of the adaptation by cross validation
+        param_transport = adaptation_cross_validation(Xsource, ysource, Xtarget, params_model,
+                                                      transpose=transpose, adaptation=adaptation)
         # Domain adaptation
-        if "OT" in adaptation:
-            # we define the parameters to cross valid
-            possible_reg_e = [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5]
-            possible_reg_cl = [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5]
+        Xsource, Xtarget, Xclean = adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose,
+                                                adaptation)
+        # Train and Learn model :
 
-            if adaptation == "UOT":
-                param_to_cv = {'reg_e': possible_reg_e, 'reg_m': possible_reg_cl}
-            elif adaptation == "JCPOT":
-                param_to_cv = {'reg_e': possible_reg_e}
-            else:  # OT
-                param_to_cv = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
-
-            cross_val_result = ot_cross_validation(Xsource, ysource, Xtarget, params_model, param_to_cv,
-                                                   transpose_plan=transpose, ot_type=adaptation)
-
-            if adaptation == "UOT":
-                param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_m': cross_val_result['reg_m']}
-            elif adaptation == "JCPOT":
-                param_transport = {'reg_e': cross_val_result['reg_e']}
-            else:  # OT
-                param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
-
-            # Transport sources to Target
-            if not transpose:
-                if adaptation == "UOT":
-                    Xsource = uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
-                elif adaptation == "JCPOT":
-                    Xsource = jcpot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
-                else:  # OT
-                    Xsource = ot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
-            # Unbalanced optimal transport targets to Source
-            else:
-                if adaptation == "UOT":
-                    Xtarget = uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
-                elif adaptation == "JCPOT":
-                    Xtarget = jcpot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
-                else:  # OT
-                    Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
-        elif adaptation == "SA":
-            # cross validation
-            param_transport = {'d': sa_cross_validation(Xsource, ysource, Xtarget, params_model, transpose)}
-            # no cross validation : if we do not find the optimal dimension value by cross value
-            # we set the d the maximal possible value
-            #  param_transport = {'d': PCA().fit(Xsource).n_components_ - 1}
-            # adaptation of the sources and targets
-            original_Xsource = Xsource
-            Xsource, Xtarget = sa_adaptation(Xsource, Xtarget, param_transport, transpose)
-            # We have to do "adapt" Xclean because we work one subspace, by doing the following, we get the subspace of
-            # Xclean but it is not adapted
-            _, Xclean = sa_adaptation(original_Xsource, Xclean, param_transport, transpose=False)
-        elif adaptation == "CORAL":
-            # original_Xsource = Xsource
-            Xsource, Xtarget = sa_adaptation(Xsource, Xtarget, transpose)
-            # TODO test and remove if useless
-            # We have to do "adapt" Xclean because we work one subspace, by doing the following, we get the subspace of
-            # Xclean but it is not adapted
-            # _, Xclean = sa_adaptation(original_Xsource, Xclean, transpose=False)
-
+        # Save informations for the run :
 
         # Learning and saving parameters :
         # From the source, training and test set are created
@@ -465,7 +487,7 @@ def main(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
             except:
                 pass
         if filename == "":
-            filename = f"./results/res{seed}.pklz"
+            filename = f"./results/" + dataset_name + adaptation + algo + ".pklz"
         f = gzip.open(filename, "wb")
         pickle.dump(results, f)
         f.close()
@@ -475,36 +497,15 @@ if __name__ == '__main__':
     # configure debugging tool
     ic.configureOutput(includeContext=True)
 
-    # main(sys.argv, adaptation=True, filename=f"./results/comparison_results_ot_T.pklz",
-    #     ot_direction="ts")
+    # TODO WARNING MODIFICATION OF :
+    #  - the dataset
+    #  - the seed lines 362 and 432
+    #  - the dataset value saved in the pickle lines 350 and 445
+    #  for the tests : TO REVERSE
 
-    # main(sys.argv, adaptation="JCPOT", filename=f"./results/jcpot_not_transpose_test.pklz", transpose=False,
-    #     algo="XGBoost")
-
-    # WARNING MODIFICATION OF :
-    # - the dataset
-    # - the seed lines 362 and 432
-    # - the dataset value saved in the pickle lines 350 and 445
-    # for the following tests
-    main(sys.argv, adaptation="UOT", filename=f"./results/abalone20_global_compare_uot.pklz", transpose=True,
-         algo="XGBoost")
-
-    """
-    main(sys.argv, adaptation="JCPOT", filename=f"./results/abalone20_global_compare_jcpot.pklz", transpose=True,
-         algo="XGBoost")
-    main(sys.argv, adaptation="OT", filename=f"./results/abalone20_global_compare.pklz", transpose=True,
-         algo="XGBoost")
-    main(sys.argv, adaptation="SA", filename=f"./results/abalone20_global_compare.pklz", transpose=True,
-         algo="XGBoost")"""
-
-    # print_pickle("results/jcpot_not_transpose_test.pklz", "results_adapt")
-    # print_pickle("results/jcpot_transpose_test.pklz", "results_adapt")
-    # print_pickle("results/ot_transpose_test.pklz", "results_adapt")
-    # print_pickle("results/sa_transpose_test.pklz", "results_adapt")
-    print_pickle("results/abalone20_global_compare_uot.pklz", "results_adapt")
+    """print_pickle("results/abalone20_global_compare_uot.pklz", "results_adapt")
     print_pickle("results/abalone20_global_compare_jcpot.pklz", "results_adapt")
-    print_pickle("results/abalone20_global_compare.pklz", "results_adapt")
-
-    """main(sys.argv, adaptation="JCPOT", filename=f"./results/comparison_results_jcpot_T.pklz", transpose=True, algo="XGBoost")
-    main(sys.argv, adaptation="SA", filename=f"./results/comparison_results_sa_T.pklz", transpose=True, algo="XGBoost")
-    main(sys.argv, adaptation="UOT", filename=f"./results/comparison_results_uot_T.pklz", transpose=True, algo="XGBoost")"""
+    print_pickle("results/abalone20_global_compare_sa.pklz", "results_adapt")
+    print_pickle("results/abalone20_global_compare_tca.pklz", "results_adapt")
+    print_pickle("results/abalone20_global_compare_coral.pklz", "results_adapt")
+    print_pickle("results/abalone20_global_compare_ot.pklz", "results_adapt")"""
