@@ -1,16 +1,13 @@
 import csv
-import sys
 import os
 import gzip
 import pickle
-import pandas as pd
-from sklearn.model_selection import StratifiedKFold
-from sklearn.model_selection import train_test_split
-from sklearn.decomposition import PCA
+from sys import argv
 
+import pandas as pd
+from datetime import datetime
 from baselines import *
 from optimal_transport import *
-from reweighted_uot import expe_main, reweighted_uot_adaptation
 
 
 def loadCsv(path):
@@ -146,27 +143,29 @@ def print_pickle(filename, type=""):
         data = pickle.load(file)
         file.close()
         for dataset in data:
-            for algo in data.get(dataset):
-                results = data[dataset][algo]
-                print("Dataset:", dataset, "Algo:", algo, "Train AP {:5.2f}".format(results[0]),
-                      "Test AP {:5.2f}".format(results[1]),
-                      "Clean AP {:5.2f}".format(results[2]),
-                      "Target AP {:5.2f}".format(results[3]),
-                      "Parameters:", results[4])
+            for transport in data.get(dataset):
+                results = data[dataset][transport]
+                print("Dataset:", dataset, "Transport method :", transport, "Algo:", results[0],
+                      "Train AP {:5.2f}".format(results[1]),
+                      "Test AP {:5.2f}".format(results[2]),
+                      "Clean AP {:5.2f}".format(results[3]),
+                      "Target AP {:5.2f}".format(results[4]),
+                      "Parameters:", results[5])
     elif type == "results_adapt":
         print("Data saved in", filename)
         file = gzip.open(filename, 'rb')
         data = pickle.load(file)
         file.close()
         for dataset in data:
-            for algo in data.get(dataset):
-                results = data[dataset][algo]
-                print("Dataset:", dataset, "Algo:", algo, "Train AP {:5.2f}".format(results[0]),
-                      "Test AP {:5.2f}".format(results[1]),
-                      "Clean AP {:5.2f}".format(results[2]),
-                      "Target AP {:5.2f}".format(results[3]),
-                      "Parameters:", results[4],
-                      "Parameters OT:", results[5])
+            for transport in data.get(dataset):
+                results = data[dataset][transport]
+                print("Dataset:", dataset, "Transport method :", transport, "Algo:", results[0],
+                      "Train AP {:5.2f}".format(results[1]),
+                      "Test AP {:5.2f}".format(results[2]),
+                      "Clean AP {:5.2f}".format(results[3]),
+                      "Target AP {:5.2f}".format(results[4]),
+                      "Parameters:", results[5],
+                      "Parameters OT:", results[6])
     else:
         print("Data saved in", filename)
         file = gzip.open(filename, 'rb')
@@ -181,18 +180,19 @@ def pickle_to_latex(filename, type=""):
         file = gzip.open(filename, 'rb')
         data = pickle.load(file)
         file.close()
-        print("\\begin{table}[]\n\\begin{adjustbox}{max width=1.1\\textwidth,center}\n\\begin{tabular}{llllllll}",
-              "\nDataset & Algorithme & Train AP & Test AP & Clean AP & ",
+        print("\\begin{table}[]\n\\begin{adjustbox}{max width=1.1\\textwidth,center}\n\\begin{tabular}{lllllllll}",
+              "\nDataset & Algorithme & Transport & Train AP & Test AP & Clean AP & ",
               "Target AP & max\_depth & num\_boost\_round\\\\")
 
         for dataset in data:
-            for algo in data.get(dataset):
-                results = data[dataset][algo]
-                print(dataset.replace("%", "\\%"), "&", algo, "&", "{:5.2f}".format(results[0]), "&",
+            for transport in data.get(dataset):
+                results = data[dataset][transport]
+                print(dataset.replace("%", "\\%"), "&", results[0], "&", transport, "&",
                       "{:5.2f}".format(results[1]), "&",
-                      "{:5.2f}".format(results[2]), "&", "{:5.2f}".format(results[3]),
-                      "&", "{:5.2f}".format(results[4]['max_depth']),
-                      "&", "{:5.2f}".format(results[4]['num_boost_round']), "\\\\")
+                      "{:5.2f}".format(results[2]), "&",
+                      "{:5.2f}".format(results[3]), "&", "{:5.2f}".format(results[4]),
+                      "&", "{:5.2f}".format(results[5]['max_depth']),
+                      "&", "{:5.2f}".format(results[5]['num_boost_round']), "\\\\")
         print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
 
     elif type == "results_adapt":
@@ -201,41 +201,19 @@ def pickle_to_latex(filename, type=""):
         data = pickle.load(file)
         file.close()
         print("\\begin{table}[]\n\\begin{adjustbox}{max width=1.1\\textwidth,center}\n\\begin{tabular}{llllllllll}",
-              "\nDataset & Algorithme & Train AP & Test AP & Clean AP & ",
-              "Target AP & max\_depth & num\_boost\_round & reg\_e & reg\_cl \\\\")
+              "\nDataset & Algorithme &  Transport & Train AP & Test AP & Clean AP & ",
+              "Target AP & max\_depth & num\_boost\_round & param_OT \\\\")
 
         for dataset in data:
-            for algo in data.get(dataset):
-                results = data[dataset][algo]
-                print(dataset.replace("%", "\\%"), "&", algo, "&", "{:5.2f}".format(results[0]), "&",
+            for transport in data.get(dataset):
+                results = data[dataset][transport]
+                print(dataset.replace("%", "\\%"), "&", results[0], "&", transport, "&",
                       "{:5.2f}".format(results[1]), "&",
-                      "{:5.2f}".format(results[2]), "&", "{:5.2f}".format(results[3]),
-                      "&", "{:5.2f}".format(results[4]['max_depth']),
-                      "&", "{:5.2f}".format(results[4]['num_boost_round']),
-                      "&", "{:5.2f}".format(results[5]['reg_e']),
-                      "&", "{:5.2f}".format(results[5]['reg_cl']), "\\\\")
-        print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
-    elif type == "results_adapt2cv":
-        print("Data saved in", filename)
-        file = gzip.open(filename, 'rb')
-        data = pickle.load(file)
-        file.close()
-        print("\\begin{table}[]\n\\begin{adjustbox}{max width=1.1\\textwidth,center}\n\\begin{tabular}{llllllllllll}",
-              "\nDataset & Algorithme & Train AP & Test AP & Clean AP & ",
-              "Target AP & max\_depth & num\_boost\_round & reg\_e & reg\_cl & CV max\_depth & CV num\_boost\_round\\\\")
-
-        for dataset in data:
-            for algo in data.get(dataset):
-                results = data[dataset][algo]
-                print(dataset.replace("%", "\\%"), "&", algo, "&", "{:5.2f}".format(results[0]), "&",
-                      "{:5.2f}".format(results[1]), "&",
-                      "{:5.2f}".format(results[2]), "&", "{:5.2f}".format(results[3]),
-                      "&", "{:5.2f}".format(results[4]['max_depth']),
-                      "&", "{:5.2f}".format(results[4]['num_boost_round']),
-                      "&", "{:5.2f}".format(results[5]['reg_e']),
-                      "&", "{:5.2f}".format(results[5]['reg_cl']),
-                      "&", "{:5.2f}".format(results[6]['param_cv_model']['max_depth']),
-                      "&", "{:5.2f}".format(results[6]['param_cv_model']['num_boost_round']), "\\\\")
+                      "{:5.2f}".format(results[2]), "&",
+                      "{:5.2f}".format(results[3]), "&", "{:5.2f}".format(results[4]),
+                      "&", "{:5.2f}".format(results[5]['max_depth']),
+                      "&", "{:5.2f}".format(results[5]['num_boost_round']),
+                      "&", results[6], "\\\\")
         print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
 
 
@@ -420,10 +398,10 @@ def train_model(X_source, y_source, X_target, y_target, X_clean, params_model, a
 
 def save_results(adaptation, dataset, algo, apTrain, apTest, apClean, apTarget, params_model, param_transport, start,
                  filename, results):
-    results[adaptation][algo] = (apTrain, apTest, apClean, apTarget, params_model, param_transport,
-                                 time.time() - start)
+    results[dataset][adaptation] = (algo, apTrain, apTest, apClean, apTarget, params_model, param_transport,
+                                    time.time() - start)
 
-    print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
+    print(dataset, algo, adaptation, "Train AP {:5.2f}".format(apTrain),
           "Test AP {:5.2f}".format(apTest),
           "Clean AP {:5.2f}".format(apClean),
           "Target AP {:5.2f}".format(apTarget), params_model, param_transport,
@@ -440,6 +418,45 @@ def save_results(adaptation, dataset, algo, apTrain, apTest, apClean, apTarget, 
     pickle.dump(results, f)
     f.close()
     return results
+
+
+def launch_run(X_source, y_source, X_target, y_target, X_clean, dataset, filename="", algo="XGBoost",
+               adaptation_method="UOT",
+               transpose=True):
+    # TODO remove X_source, y_source, X_target, y_target and X_clean from parameters and import its directly
+    #  in this method thanks to dataset + load_CSV
+
+    params_model = import_hyperparameters(algo)
+    results = {}
+    start = time.time()
+
+    now = datetime.now()
+    # create a repo per day to store the results => each repo has an id composed of the day and month
+    repo_id = now.strftime("%d%m")
+    file_id = now.strftime("%H%M%f")
+    repo_name = "results" + repo_id
+    if not os.path.exists(repo_name):
+        try:
+            os.makedirs(repo_name)
+        except:
+            pass
+
+    if filename == "":
+        filename = f"./results/" + dataset + "_" + adaptation_method + "_" + algo + file_id
+
+    results[dataset] = {}
+
+    param_transport = adaptation_cross_validation(X_source, y_source, X_target, params_model,
+                                                  transpose=transpose, adaptation=adaptation_method)
+
+    X_source, X_target, X_clean = adapt_domain(X_source, y_source, X_target, X_clean, param_transport, transpose,
+                                               adaptation_method)
+
+    apTrain, apTest, apClean, apTarget = train_model(X_source, y_source, X_target, y_target, X_clean, params_model,
+                                                     algo)
+
+    results = save_results(adaptation_method, dataset, algo, apTrain, apTest, apClean, apTarget, params_model,
+                           param_transport, start, filename, results)
 
 
 def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
@@ -463,6 +480,8 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
     for dataset in ['abalone20']:  # , 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
 
         start = time.time()
+        now = datetime.now()
+        file_id = now.strftime("%H%M%f")
         X, y = data_recovery(dataset)
         dataset_name = dataset
         pctPos = 100 * len(y[y == 1]) / len(y)
@@ -532,7 +551,7 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
             except:
                 pass
         if filename == "":
-            filename = f"./results/" + dataset_name + adaptation + algo + ".pklz"
+            filename = f"./results/" + dataset + "_" + adaptation + "_" + algo + file_id
         f = gzip.open(filename, "wb")
         pickle.dump(results, f)
         f.close()
@@ -548,77 +567,4 @@ if __name__ == '__main__':
     #  - the dataset value saved in the pickle lines 350 and 445
     #  for the tests : TO REVERSE
 
-    seed = 1
-    algo = "XGBoost"
-    results = {}
-    filename = "results/experimental_reweighted_uot.pklz"
-    for dataset in ['abalone20']:  # , 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
-
-        start = time.time()
-        X, y = data_recovery(dataset)
-        dataset_name = dataset
-        pctPos = 100 * len(y[y == 1]) / len(y)
-        dataset = "{:05.2f}%".format(pctPos) + " " + dataset
-        results["expe"] = {}
-        print(dataset)
-        np.random.seed(seed)
-        random.seed(seed)
-
-        # import the tuned parameters of the model for this dataset
-        params_model = import_hyperparameters(dataset_name, "hyperparameters_toy_dataset.csv")
-        param_transport = dict()
-
-        # Split the dataset between the source and the target(s)
-        # TODO for UOT implementation :
-        #  create unbalance during the split between source and target !
-        Xsource, Xtarget, ysource, ytarget = train_test_split(X, y, shuffle=True,
-                                                              stratify=y,
-                                                              random_state=1234,
-                                                              test_size=0.51)
-        # Keep a clean backup of Xtarget before degradation.
-        Xclean = Xtarget.copy()
-        # for loop -> degradation of the target
-        # 3 features are deteriorated : the 2nd, the 3rd and the 4th
-        for feat, coef in [(2, 0.1), (3, 10), (4, 0)]:
-            # for features 2 and 3, their values are multiplied by a coefficient
-            # resp. 0.1 and 10
-            if coef != 0:
-                Xtarget[:, feat] = Xtarget[:, feat] * coef
-            # for feature 4, some of its values are (randomly) set to 0
-            else:
-                Xtarget[np.random.choice(len(Xtarget), int(len(Xtarget) / 2)), feat] = 0
-
-        param_transport = {'reg_e': 0.5, 'reg_m': 0.1}
-        Xtarget = reweighted_uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose=True)
-
-
-        Xtrain, Xtest, ytrain, ytest = train_test_split(Xsource, ysource,
-                                                        shuffle=True,
-                                                        random_state=3456,
-                                                        stratify=ysource,
-                                                        test_size=0.3)
-
-        apTrain, apTest, apClean, apTarget = applyAlgo(algo, params_model,
-                                                       Xtrain, ytrain,
-                                                       Xtest, ytest,
-                                                       Xtarget, ytarget,
-                                                       Xclean)
-
-        results["expe"][algo] = (apTrain, apTest, apClean, apTarget, params_model, param_transport,
-                                 time.time() - start)
-        print(dataset, "expe", "Train AP {:5.2f}".format(apTrain),
-              "Test AP {:5.2f}".format(apTest),
-              "Clean AP {:5.2f}".format(apClean),
-              "Target AP {:5.2f}".format(apTarget), params_model, param_transport,
-              "in {:6.2f}s".format(time.time() - start))
-
-        if not os.path.exists("results"):
-            try:
-                os.makedirs("results")
-            except:
-                pass
-        if filename == "":
-            filename = f"./results/res{seed}.pklz"
-        f = gzip.open(filename, "wb")
-        pickle.dump(results, f)
-        f.close()
+    toy_example(argv, adaptation="reweight_UOT")

@@ -270,10 +270,7 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                     trans2_X_target = uot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train,
                                                      transpose=False)
 
-                ic(len(X_target), len(trans_X_target), len(trans_pseudo_y_target), len(trans2_X_target))
-
                 for j in range(8):
-                    ic()
                     subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
                                                                                            trans_pseudo_y_target, p=0.5)
                     # = train_test_split(trans2_X_target, trans_pseudo_y_target, test_size=0.5, shuffle=True)
