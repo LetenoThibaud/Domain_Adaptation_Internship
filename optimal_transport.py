@@ -184,10 +184,13 @@ def create_grid_search_ot(params: dict):
 
 
 def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cross_valid,
+                        y_target=None, cv_with_true_labels=False,
                         transpose_plan=True, ot_type="UOT",
                         duration_max=24, nb_training_iteration=8, gridsearch=True):
     """
     find the best hyperparameters for an optimal transport
+    :param cv_with_true_labels:
+    :param y_target:
     :param X_source:
     :param y_source:
     :param X_target:
@@ -233,9 +236,18 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                 else:  # Unbalanced OT
                     trans_X_target = uot_adaptation(X_source, y_source, X_target, param_train,
                                                     transpose=True)
-                ic()
+
                 # Get pseudo labels
-                trans_pseudo_y_target = predict_label(param_model, X_source, y_source, trans_X_target)
+                if not cv_with_true_labels:
+                    trans_pseudo_y_target = predict_label(param_model, X_source, y_source, trans_X_target)
+                else:
+                    # cross validation using the true target labels
+                    if y_target is not None:
+                        trans_pseudo_y_target = y_target
+                    else:
+                        print("Warning inconsistence in parameters of ot_cross_validation : cv_with_true_labels is ",
+                              "True but y_target is None")
+                        break
 
                 # Do the second adaptation (from target to source)
                 # We don't use target_to_source = True, instead we reverse the target and source in parameters
@@ -282,14 +294,24 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                                                    transpose=False)
                 if ot_type == "JCPOT":
                     trans_X_source = jcpot_adaptation(X_source, y_source, X_target, param_train,
-                                                   transpose=False)
+                                                      transpose=False)
                     # since JCPOT works with multisource data, X must be of shape K x (nk_source_samples, n_features))
                     # => special case, we need to reformat the data after each jcpot_adaptation
                 else:
                     trans_X_source = uot_adaptation(X_source, y_source, X_target, param_train,
                                                     transpose=False)
+
                 # Get pseudo labels
-                trans_pseudo_y_source = predict_label(param_model, trans_X_source, y_source, X_target)
+                if not cv_with_true_labels:
+                    trans_pseudo_y_source = predict_label(param_model, trans_X_source, y_source, X_target)
+                else:
+                    # cross validation using the true target labels
+                    if y_target is not None:
+                        trans_pseudo_y_source = y_target
+                    else:
+                        print("Warning inconsistence in parameters of ot_cross_validation : cv_with_true_labels is ",
+                              "True but y_target is None")
+                        break
 
                 # Second adaptation
                 if ot_type == "OT":
@@ -298,8 +320,8 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                                                     transpose=False)
                 if ot_type == "JCPOT":
                     trans2_X_target = jcpot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
-                                                    X_target=X_source, param_ot=param_train,
-                                                    transpose=False)
+                                                       X_target=X_source, param_ot=param_train,
+                                                       transpose=False)
                 else:  # Unbalanced OT
                     trans2_X_target = uot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
                                                      X_target=X_source, param_ot=param_train,
