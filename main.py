@@ -303,6 +303,7 @@ def cross_validation_model(filename="tuned_hyperparameters.csv"):
 
 
 def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model,
+                                y_target=None, cv_with_true_labels=False,
                                 transpose=True, adaptation="UOT"):
     if "OT" in adaptation:
         # we define the parameters to cross valid
@@ -321,6 +322,7 @@ def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model,
             param_to_cv = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
 
         cross_val_result = ot_cross_validation(Xsource, ysource, Xtarget, params_model, param_to_cv,
+                                               y_target=y_target, cv_with_true_labels=cv_with_true_labels,
                                                transpose_plan=transpose, ot_type=adaptation)
         if adaptation == "UOT":
             param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_m': cross_val_result['reg_m']}
@@ -420,9 +422,8 @@ def save_results(adaptation, dataset, algo, apTrain, apTest, apClean, apTarget, 
     return results
 
 
-def launch_run(X_source, y_source, X_target, y_target, X_clean, dataset, filename="", algo="XGBoost",
-               adaptation_method="UOT",
-               transpose=True):
+def launch_run(dataset, X_source, y_source, X_target, X_clean, y_target=None, filename="", algo="XGBoost",
+               adaptation_method="UOT", cv_with_true_labels=False, transpose=True):
     # TODO remove X_source, y_source, X_target, y_target and X_clean from parameters and import its directly
     #  in this method thanks to dataset + load_CSV
 
@@ -447,6 +448,7 @@ def launch_run(X_source, y_source, X_target, y_target, X_clean, dataset, filenam
     results[dataset] = {}
 
     param_transport = adaptation_cross_validation(X_source, y_source, X_target, params_model,
+                                                  y_target=y_target, cv_with_true_labels=cv_with_true_labels,
                                                   transpose=transpose, adaptation=adaptation_method)
 
     X_source, X_target, X_clean = adapt_domain(X_source, y_source, X_target, X_clean, param_transport, transpose,
@@ -515,7 +517,8 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
 
         # Tune the hyperparameters of the adaptation by cross validation
         param_transport = adaptation_cross_validation(Xsource, ysource, Xtarget, params_model,
-                                                      transpose=transpose, adaptation=adaptation)
+                                                      transpose=transpose, adaptation=adaptation,
+                                                      y_target=ytarget, cv_with_true_labels=True)
         # Domain adaptation
         Xsource, Xtarget, Xclean = adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose,
                                                 adaptation)
@@ -567,4 +570,7 @@ if __name__ == '__main__':
     #  - the dataset value saved in the pickle lines 350 and 445
     #  for the tests : TO REVERSE
 
-    toy_example(argv, adaptation="reweight_UOT")
+    #toy_example(argv, adaptation="UOT", filename=f"./results/abalone20_global_compare_uot_true_label.pklz")
+
+    print_pickle(f"./results/abalone20_global_compare_uot_true_label.pklz")
+    print_pickle(f"./results/abalone20_global_compare_uot.pklz")
