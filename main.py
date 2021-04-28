@@ -3,7 +3,7 @@ import os
 import gzip
 import pickle
 from sys import argv
-
+from threading import Thread
 import pandas as pd
 from datetime import datetime
 from baselines import *
@@ -304,6 +304,7 @@ def cross_validation_model(filename="tuned_hyperparameters.csv"):
 
 def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model,
                                 y_target=None, cv_with_true_labels=False,
+                                nb_training_iteration=8,
                                 transpose=True, adaptation="UOT"):
     if "OT" in adaptation:
         # we define the parameters to cross valid
@@ -323,6 +324,7 @@ def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model,
 
         cross_val_result = ot_cross_validation(Xsource, ysource, Xtarget, params_model, param_to_cv,
                                                y_target=y_target, cv_with_true_labels=cv_with_true_labels,
+                                               nb_training_iteration=nb_training_iteration,
                                                transpose_plan=transpose, ot_type=adaptation)
         if adaptation == "UOT":
             param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_m': cross_val_result['reg_m']}
@@ -466,7 +468,7 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
 
     :param argv:
     :param adaptation: type of adaptation wanted, default : "UOT",
-                        possible values : "JCPOT", "SA", "OT", "UOT", "CORAL"
+                        possible values : "JCPOT", "SA", "OT", "UOT", "CORAL", "reweight_UOT"
     :param filename: name of the file where results are saved
     :param transpose: default : True (the targets are projected in the Source domain),
     False (the sources are projected in the Target domain)
@@ -518,7 +520,7 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
         # Tune the hyperparameters of the adaptation by cross validation
         param_transport = adaptation_cross_validation(Xsource, ysource, Xtarget, params_model,
                                                       transpose=transpose, adaptation=adaptation,
-                                                      y_target=ytarget, cv_with_true_labels=True)
+                                                      nb_training_iteration=2)
         # Domain adaptation
         Xsource, Xtarget, Xclean = adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose,
                                                 adaptation)
@@ -548,16 +550,31 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
               "Target AP {:5.2f}".format(apTarget), params_model, param_transport,
               "in {:6.2f}s".format(time.time() - start))
 
-        if not os.path.exists("results"):
+        repo_id = now.strftime("%d%m")
+        repo_name = "results" + repo_id
+        if not os.path.exists(repo_name):
             try:
-                os.makedirs("results")
+                os.makedirs(repo_name)
             except:
                 pass
         if filename == "":
-            filename = f"./results/" + dataset + "_" + adaptation + "_" + algo + file_id
+            filename = f"./" + repo_name + "/" + dataset_name + "_" + adaptation + "_" + algo + file_id
         f = gzip.open(filename, "wb")
         pickle.dump(results, f)
         f.close()
+
+
+# in the main function, the thread are launched as follow :launch_thread(args).start()
+def launch_thread(dataset, X_source, y_source, X_target, X_clean, y_target=None, filename="", algo="XGBoost",
+                  adaptation_method="UOT", cv_with_true_labels=False, transpose=True):
+    def handle():
+        print("Thread is launch for dataset", dataset, "with algorithm", algo, "and adaptation", adaptation_method)
+
+        launch_run(dataset, X_source, y_source, X_target, X_clean, y_target, filename, algo,
+                   adaptation_method, cv_with_true_labels, transpose)
+
+    t = Thread(target=handle)
+    return t
 
 
 if __name__ == '__main__':
@@ -570,7 +587,22 @@ if __name__ == '__main__':
     #  - the dataset value saved in the pickle lines 350 and 445
     #  for the tests : TO REVERSE
 
-    #toy_example(argv, adaptation="UOT", filename=f"./results/abalone20_global_compare_uot_true_label.pklz")
+    # toy_example(argv, adaptation="OT")
+    # toy_example(argv, adaptation="UOT")
+    # toy_example(argv, adaptation="JCPOT")
+    # toy_example(argv, adaptation="reweight_UOT")
 
-    print_pickle(f"./results/abalone20_global_compare_uot_true_label.pklz")
-    print_pickle(f"./results/abalone20_global_compare_uot.pklz")
+    # print_pickle(f"./results/abalone20_global_compare_uot_true_label.pklz")
+    # print_pickle(f"./results/abalone20_global_compare_uot.pklz")
+
+    print_pickle(f"./results2804/abalone20_SA_XGBoost0932788535.pklz")
+    """print_pickle(f"./results2804/abalone20_CORAL_XGBoost0938268184.pklz")
+    print_pickle(f"./results2804/abalone20_TCA_XGBoost0928985905.pklz")
+    print_pickle(f"./results2804/abalone20_UOT_XGBoost1124761786.pklz")
+    print_pickle(f"./results2804/abalone20_OT_XGBoost0947893705.pklz")
+    print_pickle(f"./results2804/abalone20_reweight_UOT_XGBoost1139241568.pklz")
+    print_pickle(f"./results2804/abalone20_JCPOT_XGBoost1135380441.pklz")"""
+
+
+
+
