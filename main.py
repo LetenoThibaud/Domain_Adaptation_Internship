@@ -9,7 +9,6 @@ from datetime import datetime
 from baselines import *
 from optimal_transport import *
 
-
 def loadCsv(path):
     data = []
     with open(path, 'r') as csvfile:
@@ -425,7 +424,7 @@ def save_results(adaptation, dataset, algo, apTrain, apTest, apClean, apTarget, 
 
 
 def launch_run(dataset, X_source, y_source, X_target, X_clean, y_target=None, filename="", algo="XGBoost",
-               adaptation_method="UOT", cv_with_true_labels=False, transpose=True):
+               adaptation_method="UOT", cv_with_true_labels=False, transpose=True, adapt=True):
     # TODO remove X_source, y_source, X_target, y_target and X_clean from parameters and import its directly
     #  in this method thanks to dataset + load_CSV
 
@@ -449,12 +448,15 @@ def launch_run(dataset, X_source, y_source, X_target, X_clean, y_target=None, fi
 
     results[dataset] = {}
 
-    param_transport = adaptation_cross_validation(X_source, y_source, X_target, params_model,
-                                                  y_target=y_target, cv_with_true_labels=cv_with_true_labels,
-                                                  transpose=transpose, adaptation=adaptation_method)
+    if adapt:
+        param_transport = adaptation_cross_validation(X_source, y_source, X_target, params_model,
+                                                      y_target=y_target, cv_with_true_labels=cv_with_true_labels,
+                                                      transpose=transpose, adaptation=adaptation_method)
 
-    X_source, X_target, X_clean = adapt_domain(X_source, y_source, X_target, X_clean, param_transport, transpose,
-                                               adaptation_method)
+        X_source, X_target, X_clean = adapt_domain(X_source, y_source, X_target, X_clean, param_transport, transpose,
+                                                   adaptation_method)
+    else:
+        param_transport = {}  # for the pickle
 
     apTrain, apTest, apClean, apTarget = train_model(X_source, y_source, X_target, y_target, X_clean, params_model,
                                                      algo)
@@ -596,12 +598,12 @@ if __name__ == '__main__':
     # print_pickle(f"./results/abalone20_global_compare_uot.pklz")
 
     print_pickle(f"./results2804/abalone20_SA_XGBoost0932788535.pklz")
-    """print_pickle(f"./results2804/abalone20_CORAL_XGBoost0938268184.pklz")
+    print_pickle(f"./results2804/abalone20_CORAL_XGBoost0938268184.pklz")
     print_pickle(f"./results2804/abalone20_TCA_XGBoost0928985905.pklz")
     print_pickle(f"./results2804/abalone20_UOT_XGBoost1124761786.pklz")
     print_pickle(f"./results2804/abalone20_OT_XGBoost0947893705.pklz")
     print_pickle(f"./results2804/abalone20_reweight_UOT_XGBoost1139241568.pklz")
-    print_pickle(f"./results2804/abalone20_JCPOT_XGBoost1135380441.pklz")"""
+    print_pickle(f"./results2804/abalone20_JCPOT_XGBoost1135380441.pklz")
 
 
 
