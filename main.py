@@ -9,7 +9,15 @@ from datetime import datetime
 from baselines import *
 from optimal_transport import *
 
-def loadCsv(path):
+
+def import_dataset(filename):
+    data = pd.read_csv(filename, index_col=False).drop('index', axis='columns')
+    X = data[:, data.columns != 'y']
+    y = data[:, 'y']
+    return X, y
+
+
+def load_csv(path):
     data = []
     with open(path, 'r') as csvfile:
         reader = csv.reader(csvfile, delimiter=',')
@@ -85,7 +93,7 @@ def data_recovery(dataset):
             y = np.array([1 if elt == 20 else 0 for elt in data[8]])
         X = np.array(data.drop([8], axis=1))
     elif dataset in ['satimage']:
-        data, n, d = loadCsv('datasets/satimage.data')
+        data, n, d = load_csv('datasets/satimage.data')
         X = data[:, np.arange(d - 1)].astype(float)
         y = data[:, d - 1]
         y = y.astype(int)
@@ -423,12 +431,15 @@ def save_results(adaptation, dataset, algo, apTrain, apTest, apClean, apTarget, 
     return results
 
 
-def launch_run(dataset, X_source, y_source, X_target, X_clean, y_target=None, filename="", algo="XGBoost",
-               adaptation_method="UOT", cv_with_true_labels=False, transpose=True, adapt=True):
-    # TODO remove X_source, y_source, X_target, y_target and X_clean from parameters and import its directly
-    #  in this method thanks to dataset + load_CSV
+def launch_run(dataset, source_path, target_path, hyperparameter_file, filename="", algo="XGBoost",
+               adaptation_method="UOT", cv_with_true_labels=False, transpose=True, adapt=True,
+               nb_iteration_cv=8):
 
-    params_model = import_hyperparameters(algo)
+    X_source, y_source = import_dataset(source_path)
+    X_target, y_target = import_dataset(target_path)
+    X_clean = X_target
+
+    params_model = import_hyperparameters(algo, hyperparameter_file)
     results = {}
     start = time.time()
 
@@ -451,7 +462,8 @@ def launch_run(dataset, X_source, y_source, X_target, X_clean, y_target=None, fi
     if adapt:
         param_transport = adaptation_cross_validation(X_source, y_source, X_target, params_model,
                                                       y_target=y_target, cv_with_true_labels=cv_with_true_labels,
-                                                      transpose=transpose, adaptation=adaptation_method)
+                                                      transpose=transpose, adaptation=adaptation_method,
+                                                      nb_training_iteration=nb_iteration_cv)
 
         X_source, X_target, X_clean = adapt_domain(X_source, y_source, X_target, X_clean, param_transport, transpose,
                                                    adaptation_method)
@@ -567,13 +579,13 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
 
 
 # in the main function, the thread are launched as follow :launch_thread(args).start()
-def launch_thread(dataset, X_source, y_source, X_target, X_clean, y_target=None, filename="", algo="XGBoost",
-                  adaptation_method="UOT", cv_with_true_labels=False, transpose=True):
+def launch_thread(dataset, source_path, target_path, hyperparameter_file, filename="", algo="XGBoost",
+                  adaptation_method="UOT", cv_with_true_labels=False, transpose=True, adapt=True, nb_iteration_cv=8):
     def handle():
         print("Thread is launch for dataset", dataset, "with algorithm", algo, "and adaptation", adaptation_method)
 
-        launch_run(dataset, X_source, y_source, X_target, X_clean, y_target, filename, algo,
-                   adaptation_method, cv_with_true_labels, transpose)
+        launch_run(dataset, source_path, target_path, hyperparameter_file, filename, algo,
+                   adaptation_method, cv_with_true_labels, transpose, adapt, nb_iteration_cv)
 
     t = Thread(target=handle)
     return t
@@ -583,28 +595,18 @@ if __name__ == '__main__':
     # configure debugging tool
     ic.configureOutput(includeContext=True)
 
-    # TODO WARNING MODIFICATION OF :
-    #  - the dataset
-    #  - the seed lines 362 and 432
-    #  - the dataset value saved in the pickle lines 350 and 445
-    #  for the tests : TO REVERSE
+    # missing param : dataset, source_path, target_path, hyperparameter_file
 
-    # toy_example(argv, adaptation="OT")
-    # toy_example(argv, adaptation="UOT")
-    # toy_example(argv, adaptation="JCPOT")
-    # toy_example(argv, adaptation="reweight_UOT")
+    model_hyperparams = "hyperparameters.csv"
 
-    # print_pickle(f"./results/abalone20_global_compare_uot_true_label.pklz")
-    # print_pickle(f"./results/abalone20_global_compare_uot.pklz")
+    launch_run(model_hyperparams, adapt=False)  # No Adaptation
+    # CORAL and SA launch simultaneously (small computation cost)
+    launch_thread(model_hyperparams, adaptation_method="SA", nb_iteration_cv=3)
+    launch_thread(model_hyperparams, adaptation_method="CORAL", nb_iteration_cv=3)
 
-    print_pickle(f"./results2804/abalone20_SA_XGBoost0932788535.pklz")
-    print_pickle(f"./results2804/abalone20_CORAL_XGBoost0938268184.pklz")
-    print_pickle(f"./results2804/abalone20_TCA_XGBoost0928985905.pklz")
-    print_pickle(f"./results2804/abalone20_UOT_XGBoost1124761786.pklz")
-    print_pickle(f"./results2804/abalone20_OT_XGBoost0947893705.pklz")
-    print_pickle(f"./results2804/abalone20_reweight_UOT_XGBoost1139241568.pklz")
-    print_pickle(f"./results2804/abalone20_JCPOT_XGBoost1135380441.pklz")
+    launch_thread(model_hyperparams, adaptation_method="OT", nb_iteration_cv=3)
+    launch_thread(model_hyperparams, adaptation_method="UOT", nb_iteration_cv=3)
+    launch_thread(model_hyperparams, adaptation_method="JCPOT", nb_iteration_cv=3)
+    launch_thread(model_hyperparams, adaptation_method="reweight_UOT", nb_iteration_cv=3)
 
-
-
-
+    launch_thread(model_hyperparams, adaptation_method="TCA", nb_iteration_cv=3)
