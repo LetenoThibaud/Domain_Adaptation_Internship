@@ -456,8 +456,22 @@ def save_results(adaptation, dataset, algo, apTrain, apTest, apClean, apTarget, 
 
 
 def launch_run(dataset, source_path, target_path, hyperparameter_file, filename="", algo="XGBoost",
-               adaptation_method="UOT", cv_with_true_labels=False, transpose=True, adapt=True,
-               nb_iteration_cv=8):
+               adaptation_method="UOT", cv_with_true_labels=False, transpose=True, nb_iteration_cv=8):
+    """
+    :param dataset: name of the dataset
+    :param source_path: path to the cvs file containing the source dataset
+    :param target_path: path to the cvs file containing the target dataset
+    :param hyperparameter_file: path to the cvs file containing the hyperparameters of the model
+    :param filename: name of the file where the results are exported, if "" a name is generated with the name of the
+                    dataset, the model, the adaptation method and a unique id based on the launch time
+    :param algo: learning model
+    :param adaptation_method: adaptation technique : "UOT", "OT", "JCPOT", "reweight_UOT", "TCA", "SA", "CORAL", "NA"
+    :param cv_with_true_labels: boolean, if True do the cross validation of the optimal transport
+                                        using the true label of the target if available
+    :param transpose: boolean, if True, transport the target examples in the Source domain
+    :param nb_iteration_cv: nb of iteration to use in the cross validation of the adaptation
+    :return:
+    """
     X_source, y_source = import_dataset(source_path)
     X_target, y_target = import_dataset(target_path)
     X_clean = X_target
@@ -482,7 +496,7 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
 
     results[dataset] = {}
 
-    if adapt:
+    if adaptation_method != "NA":
         param_transport = adaptation_cross_validation(X_source, y_source, X_target, params_model,
                                                       y_target=y_target, cv_with_true_labels=cv_with_true_labels,
                                                       transpose=transpose, adaptation=adaptation_method,
@@ -603,12 +617,12 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
 
 # in the main function, the thread are launched as follow :launch_thread(args).start()
 def launch_thread(dataset, source_path, target_path, hyperparameter_file, filename="", algo="XGBoost",
-                  adaptation_method="UOT", cv_with_true_labels=False, transpose=True, adapt=True, nb_iteration_cv=8):
+                  adaptation_method="UOT", cv_with_true_labels=False, transpose=True, nb_iteration_cv=8):
     def handle():
         print("Thread is launch for dataset", dataset, "with algorithm", algo, "and adaptation", adaptation_method)
 
         launch_run(dataset, source_path, target_path, hyperparameter_file, filename, algo,
-                   adaptation_method, cv_with_true_labels, transpose, adapt, nb_iteration_cv)
+                   adaptation_method, cv_with_true_labels, transpose, nb_iteration_cv)
 
     t = Thread(target=handle)
     return t
