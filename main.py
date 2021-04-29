@@ -8,13 +8,34 @@ import pandas as pd
 from datetime import datetime
 from baselines import *
 from optimal_transport import *
+from sklearn.impute import SimpleImputer
 
 
 def import_dataset(filename):
     data = pd.read_csv(filename, index_col=False).drop('index', axis='columns')
-    X = data[:, data.columns != 'y']
-    y = data[:, 'y']
+    y = data.loc[:, 'y'].to_numpy()
+    X = data.loc[:, data.columns != 'y'].to_numpy()
+
+    # data = pd.read_csv(filename, index_col=False).drop('index', axis='columns')
+    # data.columns = range(data.shape[1])
+
+    # y = data.loc[:, len(data.columns)-1]
+    # X = data.loc[:, 0:len(data.columns)-2]
+
     return X, y
+
+
+def fill_nan(arr, strategy='mean', fill_value=0):
+    """
+    Replace NaN values in arrays (to be used notably for PCA)
+    :param arr: array containing NaN values
+    :param strategy: strategy to use to replace the values, can be 'mean', "median", "most_frequent" or "constant"
+    :param fill_value: value used if constant is chosen
+    :return:
+    """
+    simple_imputer = SimpleImputer(missing_values=np.nan, strategy=strategy, fill_value=fill_value)
+    simple_imputer.fit(arr)
+    return simple_imputer.transform(arr)
 
 
 def load_csv(path):
@@ -49,6 +70,9 @@ def import_hyperparameters(algo: str, filename="hyperparameters.csv"):
     :param algo: name of the algorithm we want the hyperparameters of
     :return: a dictionary of hyperparameters
     """
+
+    algo = 'ap'
+
     imported_csv_content = pd.read_csv(filename, delimiter=";")
     to_return = dict()
     column = imported_csv_content[algo]
@@ -127,7 +151,7 @@ def applyAlgo(algo, p, Xtrain, ytrain, Xtest, ytest, Xtarget, ytarget, Xclean):
         dclean = xgb.DMatrix(Xclean)
         evallist = [(dtrain, 'train')]
         # p = param
-        bst = xgb.train(p, dtrain, p['num_boost_round'],
+        bst = xgb.train(p, dtrain, p['num_round'],
                         evallist, maximize=True,
                         early_stopping_rounds=50,
                         obj=objective_AP,
@@ -199,7 +223,7 @@ def pickle_to_latex(filename, type=""):
                       "{:5.2f}".format(results[2]), "&",
                       "{:5.2f}".format(results[3]), "&", "{:5.2f}".format(results[4]),
                       "&", "{:5.2f}".format(results[5]['max_depth']),
-                      "&", "{:5.2f}".format(results[5]['num_boost_round']), "\\\\")
+                      "&", "{:5.2f}".format(results[5]['num_round']), "\\\\")
         print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
 
     elif type == "results_adapt":
@@ -219,7 +243,7 @@ def pickle_to_latex(filename, type=""):
                       "{:5.2f}".format(results[2]), "&",
                       "{:5.2f}".format(results[3]), "&", "{:5.2f}".format(results[4]),
                       "&", "{:5.2f}".format(results[5]['max_depth']),
-                      "&", "{:5.2f}".format(results[5]['num_boost_round']),
+                      "&", "{:5.2f}".format(results[5]['num_round']),
                       "&", results[6], "\\\\")
         print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
 
@@ -434,7 +458,6 @@ def save_results(adaptation, dataset, algo, apTrain, apTest, apClean, apTarget, 
 def launch_run(dataset, source_path, target_path, hyperparameter_file, filename="", algo="XGBoost",
                adaptation_method="UOT", cv_with_true_labels=False, transpose=True, adapt=True,
                nb_iteration_cv=8):
-
     X_source, y_source = import_dataset(source_path)
     X_target, y_target = import_dataset(target_path)
     X_clean = X_target
@@ -455,7 +478,7 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
             pass
 
     if filename == "":
-        filename = f"./results/" + dataset + "_" + adaptation_method + "_" + algo + file_id
+        filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + algo + file_id
 
     results[dataset] = {}
 
@@ -597,16 +620,19 @@ if __name__ == '__main__':
 
     # missing param : dataset, source_path, target_path, hyperparameter_file
 
-    model_hyperparams = "hyperparameters.csv"
+    name = "fraude1"
+    model_hyperparams = "./hyperparameters/cluster20_fraude1_best_model_and_params.csv"
+    source = "./datasets/source_20_fraude1.csv"
+    target = "./datasets/target_20_fraude1.csv"
 
-    launch_run(model_hyperparams, adapt=False)  # No Adaptation
+    # launch_run(name, source, target, model_hyperparams, adapt=False)  # No Adaptation
     # CORAL and SA launch simultaneously (small computation cost)
-    launch_thread(model_hyperparams, adaptation_method="SA", nb_iteration_cv=3)
-    launch_thread(model_hyperparams, adaptation_method="CORAL", nb_iteration_cv=3)
+    # launch_run(name, source, target, model_hyperparams, adaptation_method="SA", nb_iteration_cv=3)
+    # launch_run(name, source, target, model_hyperparams, adaptation_method="CORAL", nb_iteration_cv=3)
 
-    launch_thread(model_hyperparams, adaptation_method="OT", nb_iteration_cv=3)
-    launch_thread(model_hyperparams, adaptation_method="UOT", nb_iteration_cv=3)
-    launch_thread(model_hyperparams, adaptation_method="JCPOT", nb_iteration_cv=3)
-    launch_thread(model_hyperparams, adaptation_method="reweight_UOT", nb_iteration_cv=3)
+    launch_run(name, source, target, model_hyperparams, adaptation_method="OT", nb_iteration_cv=3)
+    # launch_run(name, source, target, model_hyperparams, adaptation_method="UOT", nb_iteration_cv=3)
+    # launch_run(name, source, target, model_hyperparams, adaptation_method="JCPOT", nb_iteration_cv=3)
+    # launch_run(name, source, target, model_hyperparams, adaptation_method="reweight_UOT", nb_iteration_cv=3)
 
-    launch_thread(model_hyperparams, adaptation_method="TCA", nb_iteration_cv=3)
+    # launch_run(name, source, target, model_hyperparams, adaptation_method="TCA", nb_iteration_cv=3)

@@ -37,7 +37,7 @@ def predict_label(param, X_train, y_train, X_eval, algo='XGBoost'):
         d_eval = xgb.DMatrix(X_eval)
 
         evallist = [(d_train, 'train')]
-        bst = xgb.train(param, d_train, param['num_boost_round'],
+        bst = xgb.train(param, d_train, param['num__round'],
                         evallist, maximize=True,
                         early_stopping_rounds=50,
                         obj=objective_AP,
