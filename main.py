@@ -8,11 +8,15 @@ import pandas as pd
 from datetime import datetime
 from baselines import *
 from optimal_transport import *
-from sklearn.impute import SimpleImputer
+from sklearn.impute import SimpleImputer, KNNImputer
 
 
-def import_dataset(filename):
+def import_dataset(filename, select_feature=False):
     data = pd.read_csv(filename, index_col=False).drop('index', axis='columns')
+
+    if select_feature:
+        data = feature_selection(data)
+
     y = data.loc[:, 'y'].to_numpy()
     X = data.loc[:, data.columns != 'y'].to_numpy()
 
@@ -21,11 +25,28 @@ def import_dataset(filename):
 
     # y = data.loc[:, len(data.columns)-1]
     # X = data.loc[:, 0:len(data.columns)-2]
+    if select_feature:
+        X = fill_nan(X, strategy="constant", fill_value=0)
 
     return X, y
 
 
-def fill_nan(arr, strategy='mean', fill_value=0):
+def feature_selection(dataframe):
+    for column_name in dataframe.columns:
+        if "rto" in column_name or "ecart" in column_name or "elast" in column_name:
+            dataframe = dataframe.drop(column_name, axis='columns')
+    return dataframe
+
+
+# set_nan_to_zero must be used using the name of the features => must be called during import_dataset
+# (before transformation of the dataset to numpy)
+def set_nan_to_zero(arr):
+    imputer = SimpleImputer(missing_values=np.nan, strategy="constant", fill_value=0)
+    imputer.fit(arr)
+    return imputer.transform(arr)
+
+
+def fill_nan(arr, strategy='mean', fill_value=0, n_neighbors=5):
     """
     Replace NaN values in arrays (to be used notably for PCA)
     :param arr: array containing NaN values
@@ -33,9 +54,14 @@ def fill_nan(arr, strategy='mean', fill_value=0):
     :param fill_value: value used if constant is chosen
     :return:
     """
-    simple_imputer = SimpleImputer(missing_values=np.nan, strategy=strategy, fill_value=fill_value)
-    simple_imputer.fit(arr)
-    return simple_imputer.transform(arr)
+    if strategy == "knn":
+        imputer = KNNImputer(missing_values=np.nan, n_neighbors=n_neighbors)
+    elif strategy == "iterative":
+        imputer = IterativeImputer(missing_values=np.nan)
+    else:
+        imputer = SimpleImputer(missing_values=np.nan, strategy=strategy, fill_value=fill_value)
+    imputer.fit(arr)
+    return imputer.transform(arr)
 
 
 def load_csv(path):
@@ -78,7 +104,8 @@ def import_hyperparameters(algo: str, filename="hyperparameters.csv"):
     column = imported_csv_content[algo]
     for i in range(len(column)):
         key, value = imported_csv_content[algo][i].split(",")
-        to_return[key] = parse_value_from_cvs(value)
+        if key != "eval_metric":
+            to_return[key] = parse_value_from_cvs(value)
     return to_return
 
 
@@ -211,9 +238,9 @@ def pickle_to_latex(filename, type=""):
         file = gzip.open(filename, 'rb')
         data = pickle.load(file)
         file.close()
-        print("\\begin{table}[]\n\\begin{adjustbox}{max width=1.1\\textwidth,center}\n\\begin{tabular}{lllllllll}",
+        print("\\begin{table}[]\n\\begin{adjustbox}{max width=1.1\\textwidth,center}\n\\begin{tabular}{lllllll}",
               "\nDataset & Algorithme & Transport & Train AP & Test AP & Clean AP & ",
-              "Target AP & max\_depth & num\_boost\_round\\\\")
+              "Target AP\\\\")
 
         for dataset in data:
             for transport in data.get(dataset):
@@ -222,8 +249,7 @@ def pickle_to_latex(filename, type=""):
                       "{:5.2f}".format(results[1]), "&",
                       "{:5.2f}".format(results[2]), "&",
                       "{:5.2f}".format(results[3]), "&", "{:5.2f}".format(results[4]),
-                      "&", "{:5.2f}".format(results[5]['max_depth']),
-                      "&", "{:5.2f}".format(results[5]['num_round']), "\\\\")
+                      "\\\\")
         print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
 
     elif type == "results_adapt":
@@ -456,7 +482,8 @@ def save_results(adaptation, dataset, algo, apTrain, apTest, apClean, apTarget, 
 
 
 def launch_run(dataset, source_path, target_path, hyperparameter_file, filename="", algo="XGBoost",
-               adaptation_method="UOT", cv_with_true_labels=False, transpose=True, nb_iteration_cv=8):
+               adaptation_method="UOT", cv_with_true_labels=False, transpose=True, nb_iteration_cv=8,
+               select_feature=False, nan_fill_strat='mean', nan_fill_constant=0, n_neighbors=20):
     """
     :param dataset: name of the dataset
     :param source_path: path to the cvs file containing the source dataset
@@ -470,10 +497,14 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
                                         using the true label of the target if available
     :param transpose: boolean, if True, transport the target examples in the Source domain
     :param nb_iteration_cv: nb of iteration to use in the cross validation of the adaptation
+    :param select_feature:
+    :param nan_fill_strat:
+    :param nan_fill_constant:
+    :param n_neighbors:
     :return:
     """
-    X_source, y_source = import_dataset(source_path)
-    X_target, y_target = import_dataset(target_path)
+    X_source, y_source = import_dataset(source_path, select_feature)
+    X_target, y_target = import_dataset(target_path, select_feature)
     X_clean = X_target
 
     params_model = import_hyperparameters(algo, hyperparameter_file)
@@ -491,12 +522,15 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
         except:
             pass
 
-    if filename == "":
-        filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + algo + file_id
-
     results[dataset] = {}
 
     if adaptation_method != "NA":
+        if adaptation_method in {"SA", "CORAL", "TCA"}:
+            if not select_feature:
+                X_source = fill_nan(X_source, nan_fill_strat, n_neighbors)
+                X_target = fill_nan(X_target, nan_fill_strat, n_neighbors)
+                X_clean = X_target
+
         param_transport = adaptation_cross_validation(X_source, y_source, X_target, params_model,
                                                       y_target=y_target, cv_with_true_labels=cv_with_true_labels,
                                                       transpose=transpose, adaptation=adaptation_method,
@@ -506,6 +540,28 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
                                                    adaptation_method)
     else:
         param_transport = {}  # for the pickle
+
+    # Creation of the filename
+    if filename == "":
+        if select_feature:
+            filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + " preprocess" + "_" + algo + \
+                       file_id
+        else:
+            filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + algo + file_id
+    if adaptation_method in {"SA", "CORAL", "TCA"}:
+        if not select_feature:
+            if nan_fill_strat == "constant":
+                param_transport['nan_fill'] = {nan_fill_strat: nan_fill_constant}
+                filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + nan_fill_strat + "_" + \
+                           algo + "_" + file_id
+            elif nan_fill_strat == "knn":
+                param_transport['nan_fill'] = {nan_fill_strat: n_neighbors}
+                filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + str(
+                    n_neighbors) + "nn_" + algo + "_" + file_id
+            else:
+                param_transport['nan_fill'] = nan_fill_strat
+                filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + nan_fill_strat + "_" + \
+                           algo + "_" + file_id
 
     apTrain, apTest, apClean, apTarget = train_model(X_source, y_source, X_target, y_target, X_clean, params_model,
                                                      algo)
@@ -628,25 +684,61 @@ def launch_thread(dataset, source_path, target_path, hyperparameter_file, filena
     return t
 
 
+def start_evaluation(clust1 : int, clust2 : int):
+    name = ["fraude1", "fraude2", "fraude3", "fraude4", "fraude5", "fraude6"]
+
+    model_hyperparams = ["./hyperparameters/cluster20_fraude1_best_model_and_params.csv",
+                         "./hyperparameters/cluster20_fraude2_best_model_and_params.csv",
+                         "./hyperparameters/cluster20_fraude3_best_model_and_params.csv",
+                         "./hyperparameters/cluster20_fraude4_best_model_and_params.csv",
+                         "./hyperparameters/cluster20_fraude5_best_model_and_params.csv",
+                         "./hyperparameters/cluster20_fraude6_best_model_and_params.csv"]
+
+    source = ["./datasets/source_20_fraude1.csv",
+              "./datasets/source_20_fraude2.csv",
+              "./datasets/source_20_fraude3.csv",
+              "./datasets/source_20_fraude4.csv",
+              "./datasets/source_20_fraude5.csv",
+              "./datasets/source_20_fraude6.csv"]
+
+    target = ["./datasets/target_20_fraude1.csv",
+              "./datasets/target_20_fraude2.csv",
+              "./datasets/target_20_fraude3.csv",
+              "./datasets/target_20_fraude4.csv",
+              "./datasets/target_20_fraude5.csv",
+              "./datasets/target_20_fraude6.csv"]
+
+    adaptation_methods = ["UOT", "OT", "JCPOT", "reweight_UOT", "TCA", "SA", "CORAL", "NA"]
+    for i in range(clust1, clust2):
+        for adaptation_method in adaptation_methods:
+            for bln in [True, False]:
+                if "OT" in adaptation_method or adaptation_method == "NA" or bln:
+                    launch_run(name[i], source[i], target[i], model_hyperparams[i],
+                               adaptation_method=adaptation_method, nb_iteration_cv=5, select_feature=bln)
+                else:
+                    for nan_strategy in ["mean", "median", "most_frequent", "knn"]:
+                        launch_run(name[i], source[i], target[i], model_hyperparams[i],
+                                   adaptation_method=adaptation_method, nb_iteration_cv=5,
+                                   nan_fill_strat=nan_strategy, select_feature=bln)
+
+
 if __name__ == '__main__':
     # configure debugging tool
     ic.configureOutput(includeContext=True)
 
     # missing param : dataset, source_path, target_path, hyperparameter_file
 
+    if len(argv) > 1:
+        if argv[1] == "1":
+            start_evaluation(0, 2)
+        elif argv[1] == "2":
+            start_evaluation(2, 4)
+        elif argv[1] == "3":
+            start_evaluation(4, 6)
+
     name = "fraude1"
     model_hyperparams = "./hyperparameters/cluster20_fraude1_best_model_and_params.csv"
     source = "./datasets/source_20_fraude1.csv"
     target = "./datasets/target_20_fraude1.csv"
 
-    # launch_run(name, source, target, model_hyperparams, adapt=False)  # No Adaptation
-    # CORAL and SA launch simultaneously (small computation cost)
-    # launch_run(name, source, target, model_hyperparams, adaptation_method="SA", nb_iteration_cv=3)
-    # launch_run(name, source, target, model_hyperparams, adaptation_method="CORAL", nb_iteration_cv=3)
-
-    launch_run(name, source, target, model_hyperparams, adaptation_method="OT", nb_iteration_cv=3)
-    # launch_run(name, source, target, model_hyperparams, adaptation_method="UOT", nb_iteration_cv=3)
-    # launch_run(name, source, target, model_hyperparams, adaptation_method="JCPOT", nb_iteration_cv=3)
-    # launch_run(name, source, target, model_hyperparams, adaptation_method="reweight_UOT", nb_iteration_cv=3)
-
-    # launch_run(name, source, target, model_hyperparams, adaptation_method="TCA", nb_iteration_cv=3)
+    launch_run(name, source, target, model_hyperparams, adaptation_method="NA", select_feature=True)

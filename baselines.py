@@ -3,8 +3,6 @@ from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 from sklearn.model_selection import StratifiedKFold
 from scipy.linalg import sqrtm
-from main import fill_nan
-
 
 # -------------Subspace Alignment-------------#
 
