@@ -56,8 +56,6 @@ def fill_nan(arr, strategy='mean', fill_value=0, n_neighbors=5):
     """
     if strategy == "knn":
         imputer = KNNImputer(missing_values=np.nan, n_neighbors=n_neighbors)
-    elif strategy == "iterative":
-        imputer = IterativeImputer(missing_values=np.nan)
     else:
         imputer = SimpleImputer(missing_values=np.nan, strategy=strategy, fill_value=fill_value)
     imputer.fit(arr)
@@ -232,45 +230,42 @@ def print_pickle(filename, type=""):
         print(data)
 
 
-def pickle_to_latex(filename, type=""):
+def pickle_to_latex(filenames, type=""):
     if type == "results":
-        print("Data saved in", filename)
-        file = gzip.open(filename, 'rb')
-        data = pickle.load(file)
-        file.close()
         print("\\begin{table}[]\n\\begin{adjustbox}{max width=1.1\\textwidth,center}\n\\begin{tabular}{lllllll}",
               "\nDataset & Algorithme & Transport & Train AP & Test AP & Clean AP & ",
               "Target AP\\\\")
-
-        for dataset in data:
-            for transport in data.get(dataset):
-                results = data[dataset][transport]
-                print(dataset.replace("%", "\\%"), "&", results[0], "&", transport, "&",
-                      "{:5.2f}".format(results[1]), "&",
-                      "{:5.2f}".format(results[2]), "&",
-                      "{:5.2f}".format(results[3]), "&", "{:5.2f}".format(results[4]),
-                      "\\\\")
+        for filename in filenames:
+            file = gzip.open(filename, 'rb')
+            data = pickle.load(file)
+            file.close()
+            for dataset in data:
+                for transport in data.get(dataset):
+                    results = data[dataset][transport]
+                    print(dataset.replace("%", "\\%"), "&", results[0], "&", transport, "&",
+                          "{:5.2f}".format(results[1]), "&",
+                          "{:5.2f}".format(results[2]), "&",
+                          "{:5.2f}".format(results[3]), "&", "{:5.2f}".format(results[4]),
+                          "\\\\")
         print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
-
     elif type == "results_adapt":
-        print("Data saved in", filename)
-        file = gzip.open(filename, 'rb')
-        data = pickle.load(file)
-        file.close()
         print("\\begin{table}[]\n\\begin{adjustbox}{max width=1.1\\textwidth,center}\n\\begin{tabular}{llllllllll}",
               "\nDataset & Algorithme &  Transport & Train AP & Test AP & Clean AP & ",
               "Target AP & max\_depth & num\_boost\_round & param_OT \\\\")
-
-        for dataset in data:
-            for transport in data.get(dataset):
-                results = data[dataset][transport]
-                print(dataset.replace("%", "\\%"), "&", results[0], "&", transport, "&",
-                      "{:5.2f}".format(results[1]), "&",
-                      "{:5.2f}".format(results[2]), "&",
-                      "{:5.2f}".format(results[3]), "&", "{:5.2f}".format(results[4]),
-                      "&", "{:5.2f}".format(results[5]['max_depth']),
-                      "&", "{:5.2f}".format(results[5]['num_round']),
-                      "&", results[6], "\\\\")
+        for filename in filenames:
+            file = gzip.open(filename, 'rb')
+            data = pickle.load(file)
+            file.close()
+            for dataset in data:
+                for transport in data.get(dataset):
+                    results = data[dataset][transport]
+                    print(dataset.replace("%", "\\%"), "&", results[0], "&", transport, "&",
+                          "{:5.2f}".format(results[1]), "&",
+                          "{:5.2f}".format(results[2]), "&",
+                          "{:5.2f}".format(results[3]), "&", "{:5.2f}".format(results[4]),
+                          "&", "{:5.2f}".format(results[5]['max_depth']),
+                          "&", "{:5.2f}".format(results[5]['num_round']),
+                          "&", results[6], "\\\\")
         print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
 
 
@@ -565,7 +560,8 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
 
     apTrain, apTest, apClean, apTarget = train_model(X_source, y_source, X_target, y_target, X_clean, params_model,
                                                      algo)
-
+    if select_feature:
+        adaptation_method = adaptation_method + " preprocess"
     results = save_results(adaptation_method, dataset, algo, apTrain, apTest, apClean, apTarget, params_model,
                            param_transport, start, filename, results)
 
