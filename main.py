@@ -8,10 +8,11 @@ import pandas as pd
 from datetime import datetime
 from baselines import *
 from optimal_transport import *
+from sklearn import preprocessing
 from sklearn.impute import SimpleImputer, KNNImputer
 
 
-def import_dataset(filename, select_feature=False):
+def import_dataset(filename, select_feature=True):
     data = pd.read_csv(filename, index_col=False).drop('index', axis='columns')
 
     if select_feature:
@@ -26,8 +27,7 @@ def import_dataset(filename, select_feature=False):
     # y = data.loc[:, len(data.columns)-1]
     # X = data.loc[:, 0:len(data.columns)-2]
     if select_feature:
-        X = fill_nan(X, strategy="constant", fill_value=0)
-
+        X = set_nan_to_zero(X)
     return X, y
 
 
@@ -38,12 +38,20 @@ def feature_selection(dataframe):
     return dataframe
 
 
+def get_normalizer_data(data):
+    return preprocessing.StandardScaler().fit(data)
+
+
 # set_nan_to_zero must be used using the name of the features => must be called during import_dataset
 # (before transformation of the dataset to numpy)
 def set_nan_to_zero(arr):
-    imputer = SimpleImputer(missing_values=np.nan, strategy="constant", fill_value=0)
+    imputer = SimpleImputer(missing_values=np.nan, strategy="constant", fill_value=1e-5)
     imputer.fit(arr)
-    return imputer.transform(arr)
+    arr = imputer.transform(arr)
+    # to avoid true divide by 0
+    arr = np.where(arr == 0, 1e-5, arr)
+    print(np.where(arr == 0))
+    return arr
 
 
 def fill_nan(arr, strategy='mean', fill_value=0, n_neighbors=5):
@@ -354,7 +362,7 @@ def cross_validation_model(filename="tuned_hyperparameters.csv"):
         export_hyperparameters(dataset_name, param, filename)
 
 
-def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model,
+def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model, normalizer,
                                 y_target=None, cv_with_true_labels=False,
                                 nb_training_iteration=8,
                                 transpose=True, adaptation="UOT"):
@@ -374,7 +382,7 @@ def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model,
         else:  # OT
             param_to_cv = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
 
-        cross_val_result = ot_cross_validation(Xsource, ysource, Xtarget, params_model, param_to_cv,
+        cross_val_result = ot_cross_validation(Xsource, ysource, Xtarget, params_model, param_to_cv, normalizer,
                                                y_target=y_target, cv_with_true_labels=cv_with_true_labels,
                                                nb_training_iteration=nb_training_iteration,
                                                transpose_plan=transpose, ot_type=adaptation)
@@ -437,7 +445,11 @@ def adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose, 
     return Xsource, Xtarget, Xclean
 
 
-def train_model(X_source, y_source, X_target, y_target, X_clean, params_model, algo="XGBoost"):
+def train_model(X_source, y_source, X_target, y_target, X_clean, params_model, normalizer, algo="XGBoost"):
+    X_source = normalizer.inverse_transform(X_source)
+    X_target = normalizer.inverse_transform(X_target)
+    X_clean = normalizer.inverse_transform(X_clean)
+
     Xtrain, Xtest, ytrain, ytest = train_test_split(X_source, y_source,
                                                     shuffle=True,
                                                     stratify=y_source,
@@ -453,14 +465,16 @@ def train_model(X_source, y_source, X_target, y_target, X_clean, params_model, a
 
 
 def save_results(adaptation, dataset, algo, apTrain, apTest, apClean, apTarget, params_model, param_transport, start,
-                 filename, results):
+                 filename, results, param_transport_true_labels=None):
+    if param_transport_true_labels is None:
+        param_transport_true_labels = {}
     results[dataset][adaptation] = (algo, apTrain, apTest, apClean, apTarget, params_model, param_transport,
                                     time.time() - start)
 
     print(dataset, algo, adaptation, "Train AP {:5.2f}".format(apTrain),
           "Test AP {:5.2f}".format(apTest),
           "Clean AP {:5.2f}".format(apClean),
-          "Target AP {:5.2f}".format(apTarget), params_model, param_transport,
+          "Target AP {:5.2f}".format(apTarget), params_model, param_transport, param_transport_true_labels,
           "in {:6.2f}s".format(time.time() - start))
 
     if not os.path.exists("results"):
@@ -478,8 +492,9 @@ def save_results(adaptation, dataset, algo, apTrain, apTest, apClean, apTarget, 
 
 def launch_run(dataset, source_path, target_path, hyperparameter_file, filename="", algo="XGBoost",
                adaptation_method="UOT", cv_with_true_labels=False, transpose=True, nb_iteration_cv=8,
-               select_feature=False, nan_fill_strat='mean', nan_fill_constant=0, n_neighbors=20):
+               select_feature=True, nan_fill_strat='mean', nan_fill_constant=0, n_neighbors=20, rescale=True):
     """
+    :param rescale:
     :param dataset: name of the dataset
     :param source_path: path to the cvs file containing the source dataset
     :param target_path: path to the cvs file containing the target dataset
@@ -498,8 +513,12 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
     :param n_neighbors:
     :return:
     """
-    X_source, y_source = import_dataset(source_path, select_feature)
-    X_target, y_target = import_dataset(target_path, select_feature)
+    X_source, y_source = import_dataset(source_path, select_feature, rescale)
+    X_target, y_target = import_dataset(target_path, select_feature, rescale)
+
+    normalizer = get_normalizer_data(X_source)
+    X_source = normalizer.transform(X_source)
+    X_target = normalizer.transform(X_target)
     X_clean = X_target
 
     params_model = import_hyperparameters(algo, hyperparameter_file)
@@ -526,25 +545,34 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
                 X_target = fill_nan(X_target, nan_fill_strat, n_neighbors)
                 X_clean = X_target
 
-        param_transport = adaptation_cross_validation(X_source, y_source, X_target, params_model,
+        param_transport = adaptation_cross_validation(X_source, y_source, X_target, params_model, normalizer,
                                                       y_target=y_target, cv_with_true_labels=cv_with_true_labels,
                                                       transpose=transpose, adaptation=adaptation_method,
                                                       nb_training_iteration=nb_iteration_cv)
-
-        X_source, X_target, X_clean = adapt_domain(X_source, y_source, X_target, X_clean, param_transport, transpose,
-                                                   adaptation_method)
+        if "OT" in adaptation_method:
+            param_transport_true_label = adaptation_cross_validation(X_source, y_source, X_target, params_model,
+                                                                     normalizer,
+                                                                     y_target=y_target, cv_with_true_labels=True,
+                                                                     transpose=transpose, adaptation=adaptation_method,
+                                                                     nb_training_iteration=nb_iteration_cv)
+            X_source_original = X_source
+            X_source, X_target, _ = adapt_domain(X_source, y_source, X_target, X_clean, param_transport,
+                                                 transpose, adaptation_method)
+            X_source, X_clean, _ = adapt_domain(X_source_original, y_source, X_clean, X_clean,
+                                                param_transport_true_label,
+                                                transpose, adaptation_method)
+        else:
+            X_source, X_target, X_clean = adapt_domain(X_source, y_source, X_target, X_clean, param_transport,
+                                                       transpose, adaptation_method)
     else:
         param_transport = {}  # for the pickle
 
     # Creation of the filename
     if filename == "":
-        if select_feature:
-            filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + " preprocess" + "_" + algo + \
-                       file_id
-        else:
-            filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + algo + file_id
+        filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + algo + file_id
     if adaptation_method in {"SA", "CORAL", "TCA"}:
         if not select_feature:
+            ic()
             if nan_fill_strat == "constant":
                 param_transport['nan_fill'] = {nan_fill_strat: nan_fill_constant}
                 filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + nan_fill_strat + "_" + \
@@ -558,12 +586,17 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
                 filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + nan_fill_strat + "_" + \
                            algo + "_" + file_id
 
-    apTrain, apTest, apClean, apTarget = train_model(X_source, y_source, X_target, y_target, X_clean, params_model,
-                                                     algo)
-    if select_feature:
-        adaptation_method = adaptation_method + " preprocess"
-    results = save_results(adaptation_method, dataset, algo, apTrain, apTest, apClean, apTarget, params_model,
-                           param_transport, start, filename, results)
+    apTrain, apTest, _, apTarget = train_model(X_source, y_source, X_target, y_target, X_clean, params_model,
+                                               normalizer,
+                                               algo)
+    _, _, apClean, _ = train_model(X_source, y_source, X_target, y_target, X_clean, params_model, normalizer,
+                                   algo)
+    if "OT" in adaptation_method:
+        results = save_results(adaptation_method, dataset, algo, apTrain, apTest, apClean, apTarget, params_model,
+                               param_transport, start, filename, results, param_transport_true_label)
+    else:
+        results = save_results(adaptation_method, dataset, algo, apTrain, apTest, apClean, apTarget, params_model,
+                               param_transport, start, filename, results)
 
 
 def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
@@ -680,7 +713,12 @@ def launch_thread(dataset, source_path, target_path, hyperparameter_file, filena
     return t
 
 
-def start_evaluation(clust1 : int, clust2 : int):
+def start_evaluation(clust1: int, clust2: int):
+    for i in range(clust1, clust2):
+        start_evaluation_cluster(i)
+
+
+def start_evaluation_cluster(i: int):
     name = ["fraude1", "fraude2", "fraude3", "fraude4", "fraude5", "fraude6"]
 
     model_hyperparams = ["./hyperparameters/cluster20_fraude1_best_model_and_params.csv",
@@ -705,17 +743,10 @@ def start_evaluation(clust1 : int, clust2 : int):
               "./datasets/target_20_fraude6.csv"]
 
     adaptation_methods = ["UOT", "OT", "JCPOT", "reweight_UOT", "TCA", "SA", "CORAL", "NA"]
-    for i in range(clust1, clust2):
-        for adaptation_method in adaptation_methods:
-            for bln in [True, False]:
-                if "OT" in adaptation_method or adaptation_method == "NA" or bln:
-                    launch_run(name[i], source[i], target[i], model_hyperparams[i],
-                               adaptation_method=adaptation_method, nb_iteration_cv=5, select_feature=bln)
-                else:
-                    for nan_strategy in ["mean", "median", "most_frequent", "knn"]:
-                        launch_run(name[i], source[i], target[i], model_hyperparams[i],
-                                   adaptation_method=adaptation_method, nb_iteration_cv=5,
-                                   nan_fill_strat=nan_strategy, select_feature=bln)
+    for adaptation_method in adaptation_methods:
+        for rescale in [True, False]:
+            launch_run(name[i], source[i], target[i], model_hyperparams[i], adaptation_method=adaptation_method,
+                       nb_iteration_cv=3, rescale=rescale)
 
 
 if __name__ == '__main__':
@@ -725,16 +756,36 @@ if __name__ == '__main__':
     # missing param : dataset, source_path, target_path, hyperparameter_file
 
     if len(argv) > 1:
-        if argv[1] == "1":
+        if argv[1] == "11":
+            print("Eval on cluster 1 and 2")
             start_evaluation(0, 2)
-        elif argv[1] == "2":
+        elif argv[1] == "22":
+            print("Eval on cluster 3 and 4")
             start_evaluation(2, 4)
-        elif argv[1] == "3":
+        elif argv[1] == "33":
+            print("Eval on cluster 5 and 6")
             start_evaluation(4, 6)
-
-    name = "fraude1"
-    model_hyperparams = "./hyperparameters/cluster20_fraude1_best_model_and_params.csv"
-    source = "./datasets/source_20_fraude1.csv"
-    target = "./datasets/target_20_fraude1.csv"
-
-    launch_run(name, source, target, model_hyperparams, adaptation_method="NA", select_feature=True)
+        elif argv[1] == "1":
+            print("Eval on cluster 1")
+            start_evaluation_cluster(0)
+        elif argv[1] == "2":
+            print("Eval on cluster 2")
+            start_evaluation_cluster(1)
+        elif argv[1] == "3":
+            print("Eval on cluster 3")
+            start_evaluation_cluster(2)
+        elif argv[1] == "4":
+            print("Eval on cluster 4")
+            start_evaluation_cluster(3)
+        elif argv[1] == "5":
+            print("Eval on cluster 5")
+            start_evaluation_cluster(4)
+        elif argv[1] == "6":
+            print("Eval on cluster 6")
+            start_evaluation_cluster(5)
+    else:
+        name = "fraude1"
+        model_hyperparams = "./hyperparameters/cluster20_fraude1_best_model_and_params.csv"
+        source = "./datasets/source_20_fraude1.csv"
+        target = "./datasets/target_20_fraude1.csv"
+        launch_run(name, source, target, model_hyperparams, adaptation_method="OT", nb_iteration_cv=2)

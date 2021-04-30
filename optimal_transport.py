@@ -37,7 +37,7 @@ def predict_label(param, X_train, y_train, X_eval, algo='XGBoost'):
         d_eval = xgb.DMatrix(X_eval)
 
         evallist = [(d_train, 'train')]
-        bst = xgb.train(param, d_train, param['num__round'],
+        bst = xgb.train(param, d_train, param['num_round'],
                         evallist, maximize=True,
                         early_stopping_rounds=50,
                         obj=objective_AP,
@@ -184,7 +184,7 @@ def create_grid_search_ot(params: dict):
     return possible_combination
 
 
-def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cross_valid,
+def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cross_valid, normalizer,
                         y_target=None, cv_with_true_labels=False,
                         transpose_plan=True, ot_type="UOT",
                         duration_max=24, nb_training_iteration=8, gridsearch=True):
@@ -243,7 +243,10 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
 
                 # Get pseudo labels
                 if not cv_with_true_labels:
-                    trans_pseudo_y_target = predict_label(param_model, X_source, y_source, trans_X_target)
+                    rescaled_X_source = normalizer.inverse_transform(X_source)
+                    rescaled_trans_X_target = normalizer.inverse_transform(trans_X_target)
+                    trans_pseudo_y_target = predict_label(param_model, rescaled_X_source, y_source,
+                                                          rescaled_trans_X_target)
                 else:
                     # cross validation using the true target labels
                     if y_target is not None:
@@ -278,10 +281,12 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
 
                     # ic(subset_trans2_X_target)
                     # ic(subset_trans_pseudo_y_target)
+                    rescaled_X_source = normalizer.inverse_transform(X_source)
+                    rescaled_subset_trans2_X_target = normalizer.inverse_transform(subset_trans2_X_target)
                     y_source_pred = predict_label(param_model,
-                                                  subset_trans2_X_target,
+                                                  rescaled_subset_trans2_X_target,
                                                   subset_trans_pseudo_y_target,
-                                                  X_source)
+                                                  rescaled_X_source)
                     precision = 100 * float(sum(y_source_pred == y_source)) / len(y_source_pred)
                     average_precision = 100 * average_precision_score(y_source, y_source_pred)
 
@@ -310,7 +315,10 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
 
                 # Get pseudo labels
                 if not cv_with_true_labels:
-                    trans_pseudo_y_source = predict_label(param_model, trans_X_source, y_source, X_target)
+                    rescaled_trans_X_source = normalizer.inverse_transform(trans_X_source)
+                    rescaled_X_target = normalizer.inverse_transform(X_target)
+                    trans_pseudo_y_source = predict_label(param_model, rescaled_trans_X_source, y_source,
+                                                          rescaled_X_target)
                 else:
                     # cross validation using the true target labels
                     if y_target is not None:
@@ -344,8 +352,11 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                                                                                            trans_pseudo_y_source,
                                                                                            p=0.5)
 
+                    rescaled_trans_X_source = normalizer.inverse_transform(trans_X_source)
+                    rescaled_subset_trans2_X_target = normalizer.inverse_transform(subset_trans2_X_target)
+
                     y_source_pred = predict_label(param_model,
-                                                  subset_trans2_X_target,
+                                                  rescaled_subset_trans2_X_target,
                                                   subset_trans_pseudo_y_target,
                                                   X_source)
                     precision = 100 * float(sum(y_source_pred == y_source)) / len(y_source_pred)
