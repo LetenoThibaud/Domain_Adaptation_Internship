@@ -1,16 +1,25 @@
 import csv
 import os
 import gzip
+import random
 import pickle
+import time
+import numpy as np
+import xgboost as xgb
 from sys import argv, stdout, stderr
 from threading import Thread
 import pandas as pd
 from datetime import datetime
-from baselines import *
-from optimal_transport import *
 from sklearn import preprocessing
 from sklearn.impute import SimpleImputer, KNNImputer
 import pathlib
+from icecream import ic
+from sklearn.metrics import average_precision_score
+from sklearn.model_selection import train_test_split, StratifiedKFold
+
+from baselines import components_analysis_based_method_cross_validation, sa_adaptation, coral_adaptation, tca_adaptation
+from optimal_transport import evalerror_AP, objective_AP, ot_cross_validation, uot_adaptation, jcpot_adaptation, \
+    reweighted_uot_adaptation, ot_adaptation
 
 
 def import_dataset(filename, select_feature=True):
@@ -51,11 +60,6 @@ def get_normalizer_data(data, type):
 def get_normalizer(X, norm='l2'):
     if norm == 'l1':
         normalizer = np.abs(X).sum(axis=1)
-    elif norm == 'manual':
-        normalizer = []
-        # TODO for i in range(X.shape[1]):
-        for i in range(X.shape[1]):
-            normalizer.append(np.linalg.norm(X[i]))
     else:
         normalizer = np.einsum('ij,ij->i', X, X)
         np.sqrt(normalizer, normalizer)
@@ -64,11 +68,9 @@ def get_normalizer(X, norm='l2'):
 
 def normalize(X, normalizer, inverse):
     if not inverse:
-        # TODO for i in range(X.shape[1]):
         for i in range(X.shape[1]):
             X[:, i] = X[:, i] / normalizer[i]
     else:
-        # TODO for i in range(X.shape[1]):
         for i in range(X.shape[1]):
             X[:, i] = X[:, i] * normalizer[i]
     return X
@@ -255,6 +257,7 @@ def applyAlgo(algo, p, Xtrain, ytrain, Xtest, ytest, Xtarget, ytarget, Xclean):
 def print_whole_repo(repo):
     for file in pathlib.Path(repo).iterdir():
         path = str(file)
+
         print_pickle(path, "results")
         print(" ")
 
@@ -273,7 +276,7 @@ def print_pickle(filename, type=""):
                       "Test AP {:5.2f}".format(results[2]),
                       "Clean AP {:5.2f}".format(results[3]),
                       "Target AP {:5.2f}".format(results[4]),
-                      "Parameters:", results[6])
+                      "Parameters:", results[7])
     elif type == "results_adapt":
         print("Data saved in", filename)
         file = gzip.open(filename, 'rb')
@@ -426,9 +429,8 @@ def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model, normali
                                 transpose=True, adaptation="UOT"):
     if "OT" in adaptation:
         # we define the parameters to cross valid
-        # TODO decommenter
-        possible_reg_e = [0.001, 0.01] #, 0.05, 0.1, 0.5, 1, 2, 5]
-        possible_reg_cl = [0.001, 0.01] #, 0.05, 0.1, 0.5, 1, 2, 5]
+        possible_reg_e = [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5]
+        possible_reg_cl = [0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5]
         possible_weighted_reg_m = [{"0": 2, "1": 1}, {"0": 5, "1": 1}, {"0": 10, "1": 1}, {"0": 20, "1": 1},
                                    {"0": 50, "1": 1}, {"0": 100, "1": 1}, {"0": 200, "1": 1}]
 
@@ -441,11 +443,13 @@ def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model, normali
         else:  # OT
             param_to_cv = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
 
-        cross_val_result = ot_cross_validation(Xsource, ysource, Xtarget, params_model, param_to_cv, normalizer,
-                                               rescale,
-                                               y_target=y_target, cv_with_true_labels=cv_with_true_labels,
-                                               nb_training_iteration=nb_training_iteration,
-                                               transpose_plan=transpose, ot_type=adaptation)
+        cross_val_result, cross_val_result_cheat = ot_cross_validation(Xsource, ysource, Xtarget, params_model,
+                                                                       param_to_cv, normalizer,
+                                                                       rescale,
+                                                                       y_target=y_target,
+                                                                       cv_with_true_labels=cv_with_true_labels,
+                                                                       nb_training_iteration=nb_training_iteration,
+                                                                       transpose_plan=transpose, ot_type=adaptation)
         if adaptation == "UOT":
             param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_m': cross_val_result['reg_m']}
         elif adaptation == "JCPOT":
@@ -454,16 +458,17 @@ def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model, normali
             param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_m': cross_val_result['reg_m']}
         else:  # OT
             param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
-        return param_transport
+        return param_transport, cross_val_result_cheat
     elif adaptation == "SA":
         return {'d': components_analysis_based_method_cross_validation(Xsource, ysource, Xtarget, params_model, rescale,
-                                                                       normalizer, transport_type="SA")}
+                                                                       normalizer, transport_type="SA",
+                                                                       extended_CV=cv_with_true_labels)}, None
     elif adaptation == "CORAL":
         return dict()  # equivalent to null but avoid crash later
     elif adaptation == "TCA":
         return {'d': components_analysis_based_method_cross_validation(Xsource, ysource, Xtarget, params_model, rescale,
-                                                                       normalizer, transport_type="TCA")}
-
+                                                                       normalizer, transport_type="TCA",
+                                                                       extended_CV=cv_with_true_labels)}, None
 
 def adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose, adaptation):
     if "OT" in adaptation:
@@ -486,9 +491,7 @@ def adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose, 
             elif adaptation == "reweight_UOT":
                 Xtarget = reweighted_uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
             else:  # OT
-                ic(Xsource)
                 Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
-                ic(Xsource)
     elif adaptation == "SA":
         original_Xsource = Xsource
         Xsource, Xtarget = sa_adaptation(Xsource, Xtarget, param_transport, transpose)
@@ -504,19 +507,21 @@ def adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose, 
         original_Xtarget = Xtarget
         Xsource, Xtarget = tca_adaptation(Xsource, Xtarget, param_transport)
         Xclean, _ = tca_adaptation(Xclean, original_Xtarget, param_transport)
-    ic(Xsource)
     return Xsource, Xtarget, Xclean
 
 
 def train_model(X_source, y_source, X_target, y_target, X_clean, params_model, normalizer, rescale, algo="XGBoost"):
     if rescale:
+        ic(normalizer)
         X_source = normalize(X_source, normalizer, True)
         X_target = normalize(X_target, normalizer, True)
-        X_clean = normalize(X_target, normalizer, True)
+        X_clean = normalize(X_clean, normalizer, True)
         # TODO rearrange to be able to choose the normalizer
         """X_source = normalizer.inverse_transform(X_source)
         X_target = normalizer.inverse_transform(X_target)
         X_clean = normalizer.inverse_transform(X_clean)"""
+
+    ic(X_source, X_target, X_clean)
 
     Xtrain, Xtest, ytrain, ytest = train_test_split(X_source, y_source,
                                                     shuffle=True,
@@ -583,14 +588,17 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
     """
     X_source, y_source = import_dataset(source_path, select_feature)
     X_target, y_target = import_dataset(target_path, select_feature)
+    ic(X_source, X_target)
     if rescale:
         normalizer = get_normalizer_data(X_source, "Normalizer")
+        ic(normalizer)
         # normalizer = get_normalizer_data(X_source, "Outliers_Robust")
         X_source = normalize(X_source, normalizer, False)
         X_target = normalize(X_target, normalizer, False)
     else:
         normalizer = None
     X_clean = X_target
+    ic(X_source, X_target, X_clean)
 
     params_model = import_hyperparameters(algo, hyperparameter_file)
     results = {}
@@ -600,7 +608,7 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
     # create a repo per day to store the results => each repo has an id composed of the day and month
     repo_id = now.strftime("%d%m")
     file_id = now.strftime("%H%M%f")
-    repo_name = "results" + repo_id
+    repo_name = "results" + repo_id + "/nuit"  # TODO remove
     if not os.path.exists(repo_name):
         try:
             os.makedirs(repo_name)
@@ -616,23 +624,14 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
                 X_target = fill_nan(X_target, nan_fill_strat, n_neighbors)
                 X_clean = X_target
 
-        param_transport = adaptation_cross_validation(X_source, y_source, X_target, params_model, normalizer,
-                                                      rescale, y_target=y_target,
-                                                      cv_with_true_labels=cv_with_true_labels,
-                                                      transpose=transpose, adaptation=adaptation_method,
-                                                      nb_training_iteration=nb_iteration_cv)
-        """if "OT" in adaptation_method:
-            param_transport_true_label = adaptation_cross_validation(X_source, y_source, X_target, params_model, normalizer, rescale,
-                                                                     y_target=y_target, cv_with_true_labels=True,
-                                                                     transpose=transpose, adaptation=adaptation_method,
-                                                                     nb_training_iteration=nb_iteration_cv)
-            X_source_original = X_source
-            X_source, X_target, _ = adapt_domain(X_source, y_source, X_target, X_clean, param_transport,
-                                                 transpose, adaptation_method)
-            X_source, X_clean, _ = adapt_domain(X_source_original, y_source, X_clean, X_clean,
-                                                param_transport_true_label,
-                                                transpose, adaptation_method)
-        else:"""
+        param_transport, param_transport_true_label = adaptation_cross_validation(X_source, y_source, X_target,
+                                                                                  params_model, normalizer,
+                                                                                  rescale, y_target=y_target,
+                                                                                  cv_with_true_labels=cv_with_true_labels,
+                                                                                  transpose=transpose,
+                                                                                  adaptation=adaptation_method,
+                                                                                  nb_training_iteration=nb_iteration_cv)
+
         X_source, X_target, X_clean = adapt_domain(X_source, y_source, X_target, X_clean, param_transport,
                                                    transpose, adaptation_method)
     else:
@@ -640,7 +639,10 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
 
     # Creation of the filename
     if filename == "":
-        filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + algo + file_id
+        if rescale:
+            filename = f"./" + repo_name + "/" + dataset + "_rescale_" + adaptation_method + "_" + algo + file_id
+        else:
+            filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + algo + file_id
     if adaptation_method in {"SA", "CORAL", "TCA"}:
         if not select_feature:
             ic()
@@ -656,6 +658,7 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
                 param_transport['nan_fill'] = nan_fill_strat
                 filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + nan_fill_strat + "_" + \
                            algo + "_" + file_id
+
     apTrain, apTest, apClean, apTarget = train_model(X_source, y_source, X_target, y_target, X_clean, params_model,
                                                      normalizer, rescale, algo)
     if "OT" in adaptation_method:
@@ -666,7 +669,7 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
                                param_transport, start, filename, results)
 
 
-def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost", rescale=True):
+def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost"):
     """
 
     :param argv:
@@ -698,6 +701,10 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
         np.random.seed(seed)
         random.seed(seed)
 
+        normalizer = get_normalizer_data(X, "Outliers_Robust")
+        X = set_nan_to_zero(X)
+        X = normalizer.transform(X)
+
         # import the tuned parameters of the model for this dataset
         params_model = import_hyperparameters(dataset_name, "hyperparameters_toy_dataset.csv", toy_example=True)
         param_transport = dict()
@@ -720,45 +727,19 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
             else:
                 Xtarget[np.random.choice(len(Xtarget), int(len(Xtarget) / 2)), feat] = 0
 
-        or_Xsource = Xsource
-        or_Xtarget = Xtarget
-
-        if rescale:
-            normalizer = get_normalizer_data(Xsource, "Normalizer")
-            # normalizer = get_normalizer_data(X_source, "Outliers_Robust")
-            Xsource = normalize(Xsource, normalizer, False)
-            Xtarget = normalize(Xtarget, normalizer, False)
-        else:
-            normalizer = None
-
-        norm_Xsource = Xsource
-        norm_Xtarget = Xtarget
-
         # Tune the hyperparameters of the adaptation by cross validation
         param_transport = adaptation_cross_validation(Xsource, ysource, Xtarget, params_model, normalizer,
                                                       transpose=transpose, adaptation=adaptation,
-                                                      nb_training_iteration=2, rescale=rescale)
-        cv_Xsource = Xsource
-        cv_Xtarget = Xtarget
-
+                                                      nb_training_iteration=2)
         # Domain adaptation
         Xsource, Xtarget, Xclean = adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose,
                                                 adaptation)
+        # Train and Learn model :
 
-        print("Original")
-        ic(or_Xsource, or_Xtarget)
-        print("Normalize")
-        ic(norm_Xsource, norm_Xtarget)
-        print("Cross Validation")
-        ic(cv_Xsource, cv_Xtarget)
-        print("Adaptation")
-        ic(Xsource, Xtarget)
-        print("Denormalize")
-        Xsource = normalize(Xsource, normalizer, True)
-        Xtarget = normalize(Xtarget, normalizer, True)
-        ic(Xsource, Xtarget)
+        # Save informations for the run :
 
-        """# From the source, training and test set are created
+        # Learning and saving parameters :
+        # From the source, training and test set are created
         Xtrain, Xtest, ytrain, ytest = train_test_split(Xsource, ysource,
                                                         shuffle=True,
                                                         random_state=3456,
@@ -794,7 +775,7 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
             filename = f"./" + repo_name + "/" + dataset_name + "_" + adaptation + "_" + algo + file_id
         f = gzip.open(filename, "wb")
         pickle.dump(results, f)
-        f.close()"""
+        f.close()
 
 
 # in the main function, the thread are launched as follow :launch_thread(args).start()
@@ -812,12 +793,12 @@ def launch_thread(dataset, source_path, target_path, hyperparameter_file, filena
     return t
 
 
-def start_evaluation(clust1: int, clust2: int):
+def start_evaluation(clust1: int, clust2: int, adaptation=None, rescale=False):
     for i in range(clust1, clust2):
-        start_evaluation_cluster(i)
+        start_evaluation_cluster(i, adaptation, rescale)
 
 
-def start_evaluation_cluster(i: int):
+def start_evaluation_cluster(i: int, adaptation=None, rescale=False):
     name = ["fraude1", "fraude2", "fraude3", "fraude4", "fraude5", "fraude6"]
 
     model_hyperparams = ["./hyperparameters/cluster20_fraude1_best_model_and_params.csv",
@@ -841,14 +822,34 @@ def start_evaluation_cluster(i: int):
               "./datasets/target_20_fraude5.csv",
               "./datasets/target_20_fraude6.csv"]
 
-    adaptation_methods = ["CORAL", "NA", "UOT", "OT"]  # , "JCPOT", "reweight_UOT", "TCA", "SA",
+    if adaptation == None:
+        adaptation_methods = ["UOT", "OT"]  # , "JCPOT", "reweight_UOT", "TCA", "SA", "NA", "CORAL"
+    else:
+        if type(adaptation) == str:
+            adaptation_methods = [adaptation]
+        else:
+            adaptation_methods = adaptation
+
     for adaptation_method in adaptation_methods:
-        launch_run(name[i], source[i], target[i], model_hyperparams[i], adaptation_method=adaptation_method,
-                   nb_iteration_cv=3)
+        if not rescale:
+            launch_run(name[i], source[i], target[i], model_hyperparams[i], adaptation_method=adaptation_method,
+                       nb_iteration_cv=4,
+                       rescale=False)
+        else:
+            launch_run(name[i], source[i], target[i], model_hyperparams[i], adaptation_method=adaptation_method,
+                       nb_iteration_cv=4,
+                       rescale=True)
 
 
 if __name__ == '__main__':
     # configure debugging tool
     ic.configureOutput(includeContext=True)
 
-    print_pickle("dico.pkz")
+    if len(argv) > 1:
+        if argv[1] == "-launch":
+            if argv[4] == "False":
+                rescale = False
+            else:
+                rescale = True
+
+            start_evaluation_cluster(int(argv[2]), argv[3], rescale)

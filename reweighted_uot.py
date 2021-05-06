@@ -110,7 +110,9 @@ def weighted_sinkhorn_knopp_unbalanced(a, b, M, reg, reg_m, numItermax=1000,
         Kv = K.dot(v)
         for j in range(len(u)):
             if a[j] >= 0.5:
+                # TODO on entre jamais pour passer le label il faut ajouter un argument / coder en mode numpy le if
                 u[j] = (a[j] / Kv[j]) ** fi_1
+
             else:
                 u[j] = (a[j] / Kv[j]) ** fi_0
 
@@ -118,6 +120,8 @@ def weighted_sinkhorn_knopp_unbalanced(a, b, M, reg, reg_m, numItermax=1000,
         Ktu = K.T.dot(u)
         for j in range(len(v)):
             if b[j] >= 0.5:
+                # TODO attention on a pas les labels ici : solution 1 on prédit les labels
+                #  / solution 2 on prends un constante moyenne des deux poids reg_m[0] + reg_m[1] / 2
                 v[j] = (b[j] / Ktu[j]) ** fi_1
             else:
                 v[j] = (b[j] / Ktu[j]) ** fi_0

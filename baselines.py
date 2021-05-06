@@ -1,10 +1,15 @@
-from optimal_transport import *
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
-from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import average_precision_score
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from scipy.linalg import sqrtm
+from main import normalize
+import numpy as np
+from icecream import ic
+
 
 # -------------Subspace Alignment-------------#
+from optimal_transport import predict_label
 
 
 def sa_adaptation(X_source, X_target, param_transport, transpose=True):
@@ -38,10 +43,13 @@ def sa_adaptation(X_source, X_target, param_transport, transpose=True):
     return sourceAdapted, targetAdapted
 
 
-def components_analysis_based_method_cross_validation(X_source, y_source, X_target, param_model, transport_type="SA",
+def components_analysis_based_method_cross_validation(X_source, y_source, X_target, param_model, rescale,
+                                                      normalizer=None, transport_type="SA", extended_CV = False,
                                                       algo='XGBoost'):
     """
     Tune the subspace dimensionality parameter d.
+    :param extended_CV: equivalent of cross_validation_true_labels for ot cv (we test for all possible values of d
+                        to measure the relevance of the method)
     :param transport_type:
     :param algo:
     :param X_source:
@@ -80,10 +88,13 @@ def components_analysis_based_method_cross_validation(X_source, y_source, X_targ
     # plt.show()
 
     # find d_max such that for all d > d_max : upper_bound > deviation
-    d_max = 1
-    for i in range(pcaS.n_features_ - 1):
-        if deviation[i] >= upper_bound[i]:
-            d_max = i + 1
+    if not extended_CV:
+        d_max = 1
+        for i in range(pcaS.n_features_ - 1):
+            if deviation[i] >= upper_bound[i]:
+                d_max = i + 1
+    else:
+        d_max = pcaS.n_features_ - 1
 
     # Test the quality of d for all d in [1; d_max] by testing it on the source
     # paper : consider the subspaces of dim d=1:dmax and select d* that minimizes the classification error
@@ -102,6 +113,10 @@ def components_analysis_based_method_cross_validation(X_source, y_source, X_targ
         for i in range(10):
             # fold_train, fold_valid = foldsTrainValid[iFoldVal]
             # 2-fold on source examples
+            if rescale:
+                sourceAdapted = normalize(sourceAdapted, normalizer, True)
+                # TODO sourceAdapted = normalizer.inverse_transform(sourceAdapted)
+
             train_X, valid_X, train_y, valid_y = train_test_split(sourceAdapted, y_source, train_size=0.5, shuffle=True)
             predicted_y_valid = predict_label(param_model, train_X, train_y, valid_X, algo)
             average_precision = 100 * average_precision_score(valid_y, predicted_y_valid)

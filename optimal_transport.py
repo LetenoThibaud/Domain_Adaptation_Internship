@@ -4,9 +4,8 @@ import time
 import numpy as np
 import xgboost as xgb
 from sklearn.metrics import average_precision_score
-from sklearn.model_selection import train_test_split
 import itertools
-import sys
+from main import normalize
 # tool to debug
 from icecream import ic
 
@@ -162,6 +161,22 @@ def generateSubset2(X, Y, p):
     return X[idx], Y[idx]
 
 
+def generateSubset4(X, Y, X_2, Y_2, p):
+    """
+    This function should not be used on target true label because the proportion of classes are not available.
+    :param X: Features
+    :param Y: Labels
+    :param p: Percentage of data kept.
+    :return: Subset of X and Y with same proportion of classes.
+    """
+    idx = []
+    for c in np.unique(Y):
+        idxClass = np.argwhere(Y == c).ravel()
+        random.shuffle(idxClass)
+        idx.extend(idxClass[0:int(p * len(idxClass))])
+    return X[idx], Y[idx], X_2[idx], Y_2[idx]
+
+
 # take a grid of parameters in input and return all the possible combination (to avoid repeating the same test)
 def create_grid_search_ot(params: dict):
     '''
@@ -185,7 +200,7 @@ def create_grid_search_ot(params: dict):
 
 
 def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cross_valid, normalizer,
-                        y_target=None, cv_with_true_labels=False,
+                        rescale, y_target=None, cv_with_true_labels=False,
                         transpose_plan=True, ot_type="UOT",
                         duration_max=24, nb_training_iteration=8, gridsearch=True):
     """
@@ -216,6 +231,7 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
     time_start = time.time()
     nb_iteration = 0
     list_results = []
+    list_results_cheat = []
 
     while time.time() - time_start < 3600 * duration_max and nb_iteration < max_iteration:
         np.random.seed(4896 * nb_iteration + 5272)
@@ -242,19 +258,21 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                                                     transpose=True)
 
                 # Get pseudo labels
-                if not cv_with_true_labels:
-                    rescaled_X_source = normalizer.inverse_transform(X_source)
-                    rescaled_trans_X_target = normalizer.inverse_transform(trans_X_target)
+                if rescale:
+                    rescaled_X_source = normalize(X_source, normalizer, True)
+                    rescaled_trans_X_target = normalize(trans_X_target, normalizer, True)
+                    # TODO
+                    """rescaled_X_source = normalizer.inverse_transform(X_source)
+                    rescaled_trans_X_target = normalizer.inverse_transform(trans_X_target)"""
                     trans_pseudo_y_target = predict_label(param_model, rescaled_X_source, y_source,
                                                           rescaled_trans_X_target)
                 else:
-                    # cross validation using the true target labels
-                    if y_target is not None:
-                        trans_pseudo_y_target = y_target
-                    else:
-                        print("Warning inconsistence in parameters of ot_cross_validation : cv_with_true_labels is ",
-                              "True but y_target is None")
-                        break
+                    trans_pseudo_y_target = predict_label(param_model, X_source, y_source, trans_X_target)
+                if cv_with_true_labels and y_target is not None:
+                    trans_pseudo_y_target_cheat = y_target
+                else:
+                    print("Warning inconsistence in parameters of ot_cross_validation : cv_with_true_labels is ",
+                          "True but y_target is None")
 
                 # Do the second adaptation (from target to source)
                 # We don't use target_to_source = True, instead we reverse the target and source in parameters
@@ -263,38 +281,90 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                 if ot_type == "OT":
                     trans2_X_target = ot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train,
                                                     transpose=False)
+                    if cv_with_true_labels and y_target is not None:
+                        trans2_X_target_cheat = ot_adaptation(X_target, trans_pseudo_y_target_cheat, X_source,
+                                                              param_train, transpose=False)
                 elif ot_type == "JCPOT":
                     trans2_X_target = jcpot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train,
                                                        transpose=False)
+                    if cv_with_true_labels and y_target is not None:
+                        trans2_X_target_cheat = jcpot_adaptation(X_target, trans_pseudo_y_target_cheat, X_source,
+                                                                 param_train, transpose=False)
                 elif ot_type == "reweight_UOT":
                     trans2_X_target = reweighted_uot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train,
                                                                 transpose=False)
+                    if cv_with_true_labels and y_target is not None:
+                        trans2_X_target_cheat = reweighted_uot_adaptation(X_target, trans_pseudo_y_target_cheat,
+                                                                          X_source, param_train, transpose=False)
                 else:  # Unbalanced OT
                     trans2_X_target = uot_adaptation(X_target, trans_pseudo_y_target, X_source, param_train,
                                                      transpose=False)
+                    if cv_with_true_labels and y_target is not None:
+                        trans2_X_target_cheat = uot_adaptation(X_target, trans_pseudo_y_target_cheat, X_source,
+                                                               param_train, transpose=False)
 
                 for j in range(8):
-                    subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
-                                                                                           trans_pseudo_y_target, p=0.5)
+                    if cv_with_true_labels and y_target is not None:
+                        subset_trans2_X_target, subset_trans_pseudo_y_target, subset_trans2_X_target_cheat,\
+                            subset_trans_pseudo_y_target_cheat = generateSubset4(trans2_X_target, trans_pseudo_y_target,
+                                                                                 trans2_X_target_cheat,
+                                                                                 trans_pseudo_y_target_cheat, p=0.5)
+                    else:
+                        subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
+                                                                                               trans_pseudo_y_target,
+                                                                                               p=0.5)
+
                     # = train_test_split(trans2_X_target, trans_pseudo_y_target, test_size=0.5, shuffle=True)
                     # = generateSubset2(trans2_X_target,trans_pseudo_y_target,p=0.5)
 
                     # ic(subset_trans2_X_target)
                     # ic(subset_trans_pseudo_y_target)
-                    rescaled_X_source = normalizer.inverse_transform(X_source)
-                    rescaled_subset_trans2_X_target = normalizer.inverse_transform(subset_trans2_X_target)
-                    y_source_pred = predict_label(param_model,
-                                                  rescaled_subset_trans2_X_target,
-                                                  subset_trans_pseudo_y_target,
-                                                  rescaled_X_source)
+                    if rescale:
+                        rescaled_X_source = normalize(X_source, normalizer, True)
+                        rescaled_subset_trans2_X_target = normalize(subset_trans2_X_target, normalizer, True)
+                        # TODO
+                        """rescaled_X_source = normalizer.inverse_transform(X_source)
+                        rescaled_subset_trans2_X_target = normalizer.inverse_transform(subset_trans2_X_target)"""
+                        y_source_pred = predict_label(param_model,
+                                                      rescaled_subset_trans2_X_target,
+                                                      subset_trans_pseudo_y_target,
+                                                      rescaled_X_source)
+
+                        if cv_with_true_labels and y_target is not None:
+                            rescaled_X_source_cheat = normalize(X_source, normalizer, True)
+                            rescaled_subset_trans2_X_target_cheat = normalize(subset_trans2_X_target_cheat,
+                                                                              normalizer, True)
+                            y_source_pred_cheat = predict_label(param_model,
+                                                          rescaled_subset_trans2_X_target_cheat,
+                                                          subset_trans_pseudo_y_target_cheat,
+                                                          rescaled_X_source_cheat)
+                    else:
+                        y_source_pred = predict_label(param_model,
+                                                      subset_trans2_X_target,
+                                                      subset_trans_pseudo_y_target,
+                                                      X_source)
+                        if cv_with_true_labels and y_target is not None:
+                            y_source_pred_cheat = predict_label(param_model,
+                                                                subset_trans2_X_target_cheat,
+                                                                subset_trans_pseudo_y_target_cheat,
+                                                                X_source)
+
                     precision = 100 * float(sum(y_source_pred == y_source)) / len(y_source_pred)
                     average_precision = 100 * average_precision_score(y_source, y_source_pred)
+
+                    precision_cheat = 100 * float(sum(y_source_pred_cheat == y_source)) / len(y_source_pred_cheat)
+                    average_precision_cheat = 100 * average_precision_score(y_source, y_source_pred_cheat)
 
                 # add results + param for this loop to the pickle
                 to_save = dict(param_train)
                 to_save['precision'] = precision
                 to_save['average_precision'] = average_precision
                 list_results.append(to_save)
+
+                to_save = dict(param_train)
+                to_save['precision'] = precision_cheat
+                to_save['average_precision'] = average_precision_cheat
+                list_results_cheat.append(to_save)
             # if we want to project the sources in the Target domain (classic method)
             else:
                 # First adaptation
@@ -315,10 +385,16 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
 
                 # Get pseudo labels
                 if not cv_with_true_labels:
-                    rescaled_trans_X_source = normalizer.inverse_transform(trans_X_source)
-                    rescaled_X_target = normalizer.inverse_transform(X_target)
-                    trans_pseudo_y_source = predict_label(param_model, rescaled_trans_X_source, y_source,
-                                                          rescaled_X_target)
+                    if rescale:
+                        rescaled_trans_X_source = normalize(trans_X_source, normalizer, True)
+                        rescaled_X_target = normalize(X_target, normalizer, True)
+                        # TODO
+                        """rescaled_trans_X_source = normalizer.inverse_transform(trans_X_source)
+                        rescaled_X_target = normalizer.inverse_transform(X_target)"""
+                        trans_pseudo_y_source = predict_label(param_model, rescaled_trans_X_source, y_source,
+                                                              rescaled_X_target)
+                    else:
+                        trans_pseudo_y_source = predict_label(param_model, trans_X_source, y_source, X_target)
                 else:
                     # cross validation using the true target labels
                     if y_target is not None:
@@ -351,14 +427,21 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                     subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
                                                                                            trans_pseudo_y_source,
                                                                                            p=0.5)
-
-                    rescaled_trans_X_source = normalizer.inverse_transform(trans_X_source)
-                    rescaled_subset_trans2_X_target = normalizer.inverse_transform(subset_trans2_X_target)
-
-                    y_source_pred = predict_label(param_model,
-                                                  rescaled_subset_trans2_X_target,
-                                                  subset_trans_pseudo_y_target,
-                                                  X_source)
+                    if rescale:
+                        rescaled_X_source = normalize(X_source, normalizer, True)
+                        rescaled_subset_trans2_X_target = normalize(subset_trans2_X_target, normalizer, True)
+                        # TODO
+                        """rescaled_X_source = normalizer.inverse_transform(X_source)
+                        rescaled_subset_trans2_X_target = normalizer.inverse_transform(subset_trans2_X_target) """
+                        y_source_pred = predict_label(param_model,
+                                                      rescaled_subset_trans2_X_target,
+                                                      subset_trans_pseudo_y_target,
+                                                      rescaled_X_source)
+                    else:
+                        y_source_pred = predict_label(param_model,
+                                                      subset_trans2_X_target,
+                                                      subset_trans_pseudo_y_target,
+                                                      X_source)
                     precision = 100 * float(sum(y_source_pred == y_source)) / len(y_source_pred)
                     average_precision = 100 * average_precision_score(y_source, y_source_pred)
 
@@ -376,6 +459,10 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
             ic(nb_iteration, to_save)
         else:
             ic(nb_iteration)
-
-    optimal_param = max(list_results, key=lambda val: val['average_precision'])
-    return optimal_param
+    if cv_with_true_labels and y_target is not None and transpose_plan:
+        optimal_param = max(list_results, key=lambda val: val['average_precision'])
+        optimal_param_cheat = max(list_results_cheat, key=lambda val: val['average_precision'])
+        return optimal_param, optimal_param_cheat
+    else:
+        optimal_param = max(list_results, key=lambda val: val['average_precision'])
+        return optimal_param, None
