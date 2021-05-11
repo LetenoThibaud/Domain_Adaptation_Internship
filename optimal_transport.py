@@ -5,11 +5,22 @@ import numpy as np
 import xgboost as xgb
 from sklearn.metrics import average_precision_score
 import itertools
-from main import normalize
 # tool to debug
 from icecream import ic
 
 from reweighted_uot import WeightedUnbalancedSinkhornTransport
+
+
+def normalize(X, normalizer, inverse):
+    if not inverse:
+        # TODO for i in range(X.shape[1]):
+        for i in range(X.shape[1]):
+            X[:, i] = X[:, i] / normalizer[i]
+    else:
+        # TODO for i in range(X.shape[1]):
+        for i in range(X.shape[1]):
+            X[:, i] = X[:, i] * normalizer[i]
+    return X
 
 
 def objective_AP(preds, dtrain):
@@ -460,6 +471,7 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
         else:
             ic(nb_iteration)
     if cv_with_true_labels and y_target is not None and transpose_plan:
+        ic("here")
         optimal_param = max(list_results, key=lambda val: val['average_precision'])
         optimal_param_cheat = max(list_results_cheat, key=lambda val: val['average_precision'])
         return optimal_param, optimal_param_cheat

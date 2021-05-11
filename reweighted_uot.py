@@ -25,14 +25,14 @@ class WeightedUnbalancedSinkhornTransport(BaseTransport):
         self.out_of_sample_map = out_of_sample_map
         self.limit_max = limit_max
 
-    def fit(self, Xs, ys=None, Xt=None, yt=None):
+    def fit(self, Xs, ys, Xt=None, yt=None):
         # check the necessary inputs parameters are here
         if check_params(Xs=Xs, Xt=Xt):
 
             super(WeightedUnbalancedSinkhornTransport, self).fit(Xs, ys, Xt, yt)
 
             returned_ = weighted_sinkhorn_unbalanced(
-                a=self.mu_s, b=self.mu_t, M=self.cost_,
+                a=self.mu_s, b=self.mu_t, a_label=ys, M=self.cost_,
                 reg=self.reg_e, reg_m=self.reg_m, method=self.method,
                 numItermax=self.max_iter, stopThr=self.tol,
                 verbose=self.verbose, log=self.log)
@@ -47,10 +47,10 @@ class WeightedUnbalancedSinkhornTransport(BaseTransport):
         return self
 
 
-def weighted_sinkhorn_unbalanced(a, b, M, reg, reg_m, method='sinkhorn', numItermax=1000,
+def weighted_sinkhorn_unbalanced(a, b, a_label, M, reg, reg_m, method='sinkhorn', numItermax=1000,
                                  stopThr=1e-6, verbose=False, log=False, **kwargs):
     if method.lower() == 'sinkhorn':
-        return weighted_sinkhorn_knopp_unbalanced(a, b, M, reg, reg_m,
+        return weighted_sinkhorn_knopp_unbalanced(a, b, a_label, M, reg, reg_m,
                                                   numItermax=numItermax,
                                                   stopThr=stopThr, verbose=verbose,
                                                   log=log, **kwargs)
@@ -58,7 +58,7 @@ def weighted_sinkhorn_unbalanced(a, b, M, reg, reg_m, method='sinkhorn', numIter
         raise ValueError("Unknown method '%s'." % method)
 
 
-def weighted_sinkhorn_knopp_unbalanced(a, b, M, reg, reg_m, numItermax=1000,
+def weighted_sinkhorn_knopp_unbalanced(a, b, a_label, M, reg, reg_m, numItermax=1000,
                                        stopThr=1e-6, verbose=False, log=False, **kwargs):
     # a the distribution of the source
     # b the distribution of the target
@@ -100,6 +100,8 @@ def weighted_sinkhorn_knopp_unbalanced(a, b, M, reg, reg_m, numItermax=1000,
 
     fi_0 = reg_m["0"] / (reg_m["0"] + reg)
     fi_1 = reg_m["1"] / (reg_m["1"] + reg)
+    reg_m_mean = (reg_m["0"] + reg_m["1"])/2
+    fi_mean = reg_m_mean / (reg_m_mean + reg)
 
     err = 1.
 
@@ -108,24 +110,11 @@ def weighted_sinkhorn_knopp_unbalanced(a, b, M, reg, reg_m, numItermax=1000,
         vprev = v
 
         Kv = K.dot(v)
-        for j in range(len(u)):
-            if a[j] >= 0.5:
-                # TODO on entre jamais pour passer le label il faut ajouter un argument / coder en mode numpy le if
-                u[j] = (a[j] / Kv[j]) ** fi_1
-
-            else:
-                u[j] = (a[j] / Kv[j]) ** fi_0
-
+        u = np.where(a_label == 1, (a/Kv)**fi_1, (a/Kv)**fi_0)
         # u = (a / Kv) ** fi
-        Ktu = K.T.dot(u)
-        for j in range(len(v)):
-            if b[j] >= 0.5:
-                # TODO attention on a pas les labels ici : solution 1 on prédit les labels
-                #  / solution 2 on prends un constante moyenne des deux poids reg_m[0] + reg_m[1] / 2
-                v[j] = (b[j] / Ktu[j]) ** fi_1
-            else:
-                v[j] = (b[j] / Ktu[j]) ** fi_0
 
+        Ktu = K.T.dot(u)
+        v = (b / Ktu) ** fi_mean
         # v = (b / Ktu) ** fi
 
         if (np.any(Ktu == 0.)
