@@ -20,6 +20,7 @@ from sklearn.model_selection import train_test_split, StratifiedKFold
 from baselines import *
 from optimal_transport import evalerror_AP, objective_AP, ot_cross_validation, uot_adaptation, jcpot_adaptation, \
     reweighted_uot_adaptation, ot_adaptation, normalize, create_grid_search_ot
+# from OTDR import ot_dimension_reduction, reverse_dimension_reduction
 
 
 def import_dataset(filename, select_feature=True):
@@ -139,10 +140,10 @@ def import_hyperparameters(algo: str, filename="hyperparameters.csv", toy_exampl
     :param algo: name of the algorithm we want the hyperparameters of
     :return: a dictionary of hyperparameters
     """
-    if not toy_example:
-        algo = 'ap'
 
     imported_csv_content = pd.read_csv(filename, delimiter=";")
+    if not toy_example:
+        algo = imported_csv_content.keys()[0]
     to_return = dict()
     column = imported_csv_content[algo]
     for i in range(len(column)):
@@ -253,7 +254,7 @@ def print_whole_repo(repo, constraint=""):
                     print_pickle(path)
                     print(" ")
             elif len(constraint) <= 1:
-                print_pickle(path, "results")
+                print_pickle(path)
                 print(" ")
 
 
@@ -424,8 +425,8 @@ def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model, normali
                                 transpose=True, adaptation="UOT"):
     if "OT" in adaptation:
         # we define the parameters to cross valid
-        possible_reg_e = [0.001, 0.01]  # , 0.05, 0.1, 0.5, 1, 2, 5]
-        possible_reg_cl = [0.001, 0.01]  # , 0.05, 0.1, 0.5, 1, 2, 5]
+        possible_reg_e = [0.0000001, 0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1, 1]
+        possible_reg_cl = [0.0000001, 0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1, 1]
         possible_weighted_reg_m = create_grid_search_ot({"0": [1, 2, 3, 5], "1": [1, 2, 3, 5]})
 
         if adaptation == "UOT":
@@ -456,13 +457,13 @@ def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model, normali
     elif adaptation == "SA":
         return {'d': components_analysis_based_method_cross_validation(Xsource, ysource, Xtarget, params_model, rescale,
                                                                        normalizer, transport_type="SA",
-                                                                       extended_CV=cv_with_true_labels)}, None
+                                                                       extended_CV=cv_with_true_labels)}, dict()
     elif adaptation == "CORAL":
-        return dict(), None  # equivalent to null but avoid crash later
+        return dict(), dict()  # equivalent to null but avoid crash later
     elif adaptation == "TCA":
         return {'d': components_analysis_based_method_cross_validation(Xsource, ysource, Xtarget, params_model, rescale,
                                                                        normalizer, transport_type="TCA",
-                                                                       extended_CV=cv_with_true_labels)}, None
+                                                                       extended_CV=cv_with_true_labels)}, dict()
 
 
 def adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose, adaptation):
@@ -516,8 +517,6 @@ def train_model(X_source, y_source, X_target, y_target, X_clean, params_model, n
         X_target = normalizer.inverse_transform(X_target)
         X_clean = normalizer.inverse_transform(X_clean)"""
 
-    ic(X_source, X_target, X_clean)
-
     Xtrain, Xtest, ytrain, ytest = train_test_split(X_source, y_source,
                                                     shuffle=True,
                                                     stratify=y_source,
@@ -535,7 +534,6 @@ def train_model(X_source, y_source, X_target, y_target, X_clean, params_model, n
 def save_results(adaptation, dataset, algo, apTrain, apTest, apClean, apTarget, params_model, param_transport, start,
                  filename, results, param_transport_true_labels=None):
     if param_transport_true_labels is None:
-        ic("I SHOULD NOT BE HERE")
         param_transport_true_labels = {}
     results[dataset][adaptation] = (algo, apTrain, apTest, apClean, apTarget, params_model, param_transport,
                                     time.time() - start)
@@ -562,7 +560,8 @@ def save_results(adaptation, dataset, algo, apTrain, apTest, apClean, apTarget, 
 
 def launch_run(dataset, source_path, target_path, hyperparameter_file, filename="", algo="XGBoost",
                adaptation_method="UOT", cv_with_true_labels=True, transpose=True, nb_iteration_cv=8,
-               select_feature=True, nan_fill_strat='mean', nan_fill_constant=0, n_neighbors=20, rescale=True):
+               select_feature=True, nan_fill_strat='mean', nan_fill_constant=0, n_neighbors=20, rescale=False,
+               expe=False):
     """
     :param rescale:
     :param dataset: name of the dataset
@@ -596,6 +595,9 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
         normalizer = None
     X_clean = X_target
     # ic(X_source, X_target, X_clean)
+
+    # if expe:
+    #    X_source, X_target = ot_dimension_reduction(X_source, X_target, y_target)
 
     params_model = import_hyperparameters(algo, hyperparameter_file)
     results = {}
@@ -658,12 +660,8 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
 
     apTrain, apTest, apClean, apTarget = train_model(X_source, y_source, X_target, y_target, X_clean, params_model,
                                                      normalizer, rescale, algo)
-    if "OT" in adaptation_method:
-        results = save_results(adaptation_method, dataset, algo, apTrain, apTest, apClean, apTarget, params_model,
-                               param_transport, start, filename, results, param_transport_true_label)
-    else:
-        results = save_results(adaptation_method, dataset, algo, apTrain, apTest, apClean, apTarget, params_model,
-                               param_transport, start, filename, results)
+    results = save_results(adaptation_method, dataset, algo, apTrain, apTest, apClean, apTarget, params_model,
+                           param_transport, start, filename, results, param_transport_true_label)
 
 
 def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost", rescale=False,
@@ -731,6 +729,10 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
             else:
                 Xtarget[np.random.choice(len(Xtarget), int(len(Xtarget) / 2)), feat] = 0
 
+        # TODO REMOVE IT
+        # Xsource, Xtarget, Popt = ot_dimension_reduction(Xsource, Xtarget, ysource)
+        # _, Xclean, _ = ot_dimension_reduction(Xsource, Xtarget, ysource)
+
         # Tune the hyperparameters of the adaptation by cross validation
         param_transport, cheat_param_transport = adaptation_cross_validation(Xsource, ysource, Xtarget,
                                                                              params_model, normalizer,
@@ -741,6 +743,11 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
                                                                              nb_training_iteration=nb_iteration_cv)
 
         print(cheat_param_transport)
+
+        # Xsource = reverse_dimension_reduction(Xsource, Popt)
+        # Xtarget = reverse_dimension_reduction(Xtarget, Popt)
+        # Xclean = reverse_dimension_reduction(Xclean, Popt)
+
 
         # Domain adaptation
         Xsource, Xtarget, Xclean = adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose,
@@ -800,7 +807,7 @@ def start_evaluation(clust1: int, clust2: int, adaptation=None, rescale=False):
 
 
 def start_evaluation_cluster(i: int, adaptation=None, rescale=False):
-    name = ["fraude1", "fraude2", "fraude3", "fraude4", "fraude5", "fraude6"]
+    """name = ["fraude1", "fraude2", "fraude3", "fraude4", "fraude5", "fraude6"]
 
     model_hyperparams = ["./hyperparameters/cluster20_fraude1_best_model_and_params.csv",
                          "./hyperparameters/cluster20_fraude2_best_model_and_params.csv",
@@ -821,10 +828,18 @@ def start_evaluation_cluster(i: int, adaptation=None, rescale=False):
               "./datasets/target_20_fraude3.csv",
               "./datasets/target_20_fraude4.csv",
               "./datasets/target_20_fraude5.csv",
-              "./datasets/target_20_fraude6.csv"]
+              "./datasets/target_20_fraude6.csv"]"""
+
+    model_hyperparams = "~/restitution/9_travaux/dm/2020/modeles_seg/modeles_seg_new/cluster" + str(
+        i) + "_fraude2_best_model_and_params.csv"
+    #
+
+    source = "./datasets_fraude2/source_" + str(i) + "_fraude2.csv"
+    target = "./datasets_fraude2/target_" + str(i) + "_fraude2.csv"
 
     if adaptation == None:
-        adaptation_methods = ["CORAL"]  # ["UOT", "OT", "SA", "NA", "CORAL"] # ,"reweight_UOT", "JCPOT", "TCA"
+        adaptation_methods = ["NA", "CORAL", "UOT", "OT", "SA", "reweight_UOT",
+                              "JCPOT"]  # ["UOT", "OT", "SA", "NA", "CORAL"] # ,"reweight_UOT", "JCPOT", "TCA"
     else:
         if type(adaptation) == str:
             adaptation_methods = [adaptation]
@@ -832,8 +847,10 @@ def start_evaluation_cluster(i: int, adaptation=None, rescale=False):
             adaptation_methods = adaptation
 
     for adaptation_method in adaptation_methods:
-        launch_run(name[i], source[i], target[i], model_hyperparams[i], adaptation_method=adaptation_method,
-                   nb_iteration_cv=2, rescale=rescale, cv_with_true_labels=True)
+        print("Start evaluation on cluster", i, "with adaptation", adaptation_method)
+        name = "cluster" + str(i) + "_fraude2"
+        launch_run(name, source, target, model_hyperparams, adaptation_method=adaptation_method,
+                   nb_iteration_cv=3, rescale=rescale, cv_with_true_labels=True, filename=filename)
 
 
 def expe_norm():
@@ -886,6 +903,17 @@ def expe_norm():
     ic(source)"""
 
 
+def expe_reduction():
+    name = "fraude2"
+    model_hyperparams = "./hyperparameters/cluster20_fraude2_best_model_and_params.csv",
+    source = "./datasets/source_20_fraude2.csv",
+    target = "./datasets/target_20_fraude2.csv",
+
+    launch_run(name, source, target, model_hyperparams, adaptation_method="UOT",
+               nb_iteration_cv=2, rescale=False, expe=True, cv_with_true_labels=True,
+               filename=f"./results1105/expe_reduction")
+
+
 if __name__ == '__main__':
     # configure debugging tool
     ic.configureOutput(includeContext=True)
@@ -896,26 +924,36 @@ if __name__ == '__main__':
                 rescale = False
             else:
                 rescale = True"""
-            print("Start evaluation on cluster", int(argv[2]), "with adaptation",
-                  argv[3])  # , "and rescale is", rescale)
-            start_evaluation_cluster(int(argv[2]), argv[3])
-        elif argv[1] == "1":
-            for i in range(3):
-                start_evaluation_cluster(i, adaptation=["OT", "UOT"])
-        elif argv[1] == "2":
-            for i in range(3, 6):
-                start_evaluation_cluster(i, adaptation=["OT", "UOT"])
+            # print("Start evaluation on cluster", int(argv[2])+1, "with adaptation",
+            #      argv[3])  # , "and rescale is", rescale)
+            if argv[3] == "None":
+                start_evaluation_cluster(int(argv[2]))
+            else:
+                start_evaluation_cluster(int(argv[2]), argv[3])
     else:
-
-        # expe_norm()
-
-        # start_evaluation_cluster(1, "OT")  # adaptation=["OT", "UOT"])
-
-        toy_example(argv, adaptation="reweight_UOT", nb_iteration_cv=2)
-
-        # print_pickle("results1105/abalone20_UOT_XGBoost1054723655")
-
         """constraints = ["fraude1", "fraude2", "fraude3", "fraude4", "fraude5", "fraude6"]
         for constraint in constraints :
             print_whole_repo("./results0605/nuit/", constraint)  
             print_whole_repo("./results1105/nuit/", constraint)"""
+
+        # expe_reduction()
+
+        # start_evaluation_cluster(1, "OT")
+        # print_pickle("./results1205/fraude2_rescale_OT_XGBoost0849701197")
+
+        path = "~/restitution/9_travaux/dm/2020/modeles_seg/modeles_seg_new/cluster" + str(
+            9) + "_fraude2_best_model_and_params.csv"
+        import_hyperparameters("XGBoost", path)
+        """with open('./codes/dicocluster.pickle', 'rb') as file:
+            full_dico = pickle.load(file)
+            dico = dict()
+            i = 0
+            cluster = 14
+            for key in full_dico.keys():
+                if i < 10:
+                    print(key)
+                i+=1
+                if key[:len(str(cluster))+1] == (str(cluster)+':') :
+                    dico[key[len(str(cluster))+1:]] = full_dico[key]
+            ic(dico)"""
+

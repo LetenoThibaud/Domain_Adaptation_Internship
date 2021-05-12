@@ -1,4 +1,5 @@
 import ot
+# import ot.dr
 import random
 import time
 import numpy as np
@@ -9,6 +10,20 @@ import itertools
 from icecream import ic
 
 from reweighted_uot import WeightedUnbalancedSinkhornTransport
+
+"""def ot_dimension_reduction(Xsource, Xtarget, ysource, reg_reduction="0.05", p=2, method="FDA"):
+    p = 2
+    reg = 1e0
+    k = 10
+    maxiter = 100
+
+    P0 = np.random.randn(Xsource.shape[1], p)
+
+    P0 /= np.sqrt(np.sum(P0 ** 2, 0, keepdims=True))
+
+    Pwda, projwda = ot.dr.wda(Xsource, ysource, p, reg, k, maxiter=maxiter, P0=P0)
+
+    return projwda(Xsource), projwda(Xtarget)"""
 
 
 def normalize(X, normalizer, inverse):

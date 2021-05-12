@@ -3,9 +3,9 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import average_precision_score
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from scipy.linalg import sqrtm
-from main import normalize
 import numpy as np
 from icecream import ic
+from optimal_transport import normalize
 
 
 # -------------Subspace Alignment-------------#
