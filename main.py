@@ -20,7 +20,39 @@ from sklearn.model_selection import train_test_split, StratifiedKFold
 from baselines import *
 from optimal_transport import evalerror_AP, objective_AP, ot_cross_validation, uot_adaptation, jcpot_adaptation, \
     reweighted_uot_adaptation, ot_adaptation, normalize, create_grid_search_ot
+
+
 # from OTDR import ot_dimension_reduction, reverse_dimension_reduction
+
+
+def import_source_per_year(filename, select_feature=True):
+    data = pd.read_csv(filename, index_col=False)  # .drop('index', axis='columns')
+
+    source1 = data[data['index'].str.contains("_2016")]
+    source2 = data[data['index'].str.contains("_2017")]
+    source3 = data[data['index'].str.contains("_2018")]
+
+    source1 = source1.drop('index', axis='columns')
+    source2 = source2.drop('index', axis='columns')
+    source3 = source3.drop('index', axis='columns')
+
+    if select_feature:
+        source1 = feature_selection(source1)
+        source2 = feature_selection(source2)
+        source3 = feature_selection(source3)
+
+    y_1 = source1.loc[:, 'y'].to_numpy()
+    X_1 = source1.loc[:, source1.columns != 'y'].to_numpy()
+    y_2 = source2.loc[:, 'y'].to_numpy()
+    X_2 = source2.loc[:, source2.columns != 'y'].to_numpy()
+    y_3 = source3.loc[:, 'y'].to_numpy()
+    X_3 = source3.loc[:, source3.columns != 'y'].to_numpy()
+
+    X_1 = set_nan_to_zero(X_1)
+    X_2 = set_nan_to_zero(X_2)
+    X_3 = set_nan_to_zero(X_3)
+
+    return X_1, y_1, X_2, y_2, X_3, y_3
 
 
 def import_dataset(filename, select_feature=True):
@@ -258,6 +290,20 @@ def print_whole_repo(repo, constraint=""):
                 print(" ")
 
 
+def latex_whole_repo(repo, constraint=""):
+    for file in pathlib.Path(repo).iterdir():
+        path = str(file)
+        print("Data saved in", path)
+        if not "ipynb" in path:
+            if len(constraint) > 1 and constraint in path:
+                if "OT" in path:
+                    pickle_to_latex(path, "results_adapt")
+                    print(" ")
+            elif len(constraint) <= 1:
+                pickle_to_latex(path, "results_adapt")
+                print(" ")
+
+
 def print_pickle(filename, type=""):
     if type == "results":
         print("Data saved in", filename)
@@ -315,23 +361,22 @@ def pickle_to_latex(filenames, type=""):
                           "\\\\")
         print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
     elif type == "results_adapt":
-        print("\\begin{table}[]\n\\begin{adjustbox}{max width=1.1\\textwidth,center}\n\\begin{tabular}{llllllllll}",
+        print("\\begin{table}[]\n\\begin{adjustbox}{max width=1.1\\textwidth,center}\n\\begin{tabular}{lllllllll}",
               "\nDataset & Algorithme &  Transport & Train AP & Test AP & Clean AP & ",
-              "Target AP & max\_depth & num\_boost\_round & param_OT \\\\")
-        for filename in filenames:
-            file = gzip.open(filename, 'rb')
-            data = pickle.load(file)
-            file.close()
-            for dataset in data:
-                for transport in data.get(dataset):
-                    results = data[dataset][transport]
-                    print(dataset.replace("%", "\\%"), "&", results[0], "&", transport, "&",
-                          "{:5.2f}".format(results[1]), "&",
-                          "{:5.2f}".format(results[2]), "&",
-                          "{:5.2f}".format(results[3]), "&", "{:5.2f}".format(results[4]),
-                          "&", "{:5.2f}".format(results[5]['max_depth']),
-                          "&", "{:5.2f}".format(results[5]['num_round']),
-                          "&", results[6], "\\\\")
+              "Target AP & param_OT & param_OT_true_labels \\\\")
+        file = gzip.open(filenames, 'rb')
+        data = pickle.load(file)
+        file.close()
+        for dataset in data:
+            for transport in data.get(dataset):
+                results = data[dataset][transport]
+                print(dataset.replace("%", "\\%"), "&", results[0], "&", transport, "&",
+                      "{:5.2f}".format(results[1]), "&",
+                      "{:5.2f}".format(results[2]), "&",
+                      "{:5.2f}".format(results[3]), "&", "{:5.2f}".format(results[4]),
+                      "&", results[6],
+                      "&", results[7],
+                      "\\\\")
         print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
 
 
@@ -536,7 +581,7 @@ def save_results(adaptation, dataset, algo, apTrain, apTest, apClean, apTarget, 
     if param_transport_true_labels is None:
         param_transport_true_labels = {}
     results[dataset][adaptation] = (algo, apTrain, apTest, apClean, apTarget, params_model, param_transport,
-                                    time.time() - start)
+                                    param_transport_true_labels, time.time() - start)
 
     print(param_transport_true_labels)
     print(dataset, algo, adaptation, "Train AP {:5.2f}".format(apTrain),
@@ -748,7 +793,6 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
         # Xtarget = reverse_dimension_reduction(Xtarget, Popt)
         # Xclean = reverse_dimension_reduction(Xclean, Popt)
 
-
         # Domain adaptation
         Xsource, Xtarget, Xclean = adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose,
                                                 adaptation)
@@ -806,7 +850,7 @@ def start_evaluation(clust1: int, clust2: int, adaptation=None, rescale=False):
         start_evaluation_cluster(i, adaptation, rescale)
 
 
-def start_evaluation_cluster(i: int, adaptation=None, rescale=False):
+def start_evaluation_cluster(i: int, adaptation=None, rescale=False, filename=""):
     """name = ["fraude1", "fraude2", "fraude3", "fraude4", "fraude5", "fraude6"]
 
     model_hyperparams = ["./hyperparameters/cluster20_fraude1_best_model_and_params.csv",
@@ -838,8 +882,8 @@ def start_evaluation_cluster(i: int, adaptation=None, rescale=False):
     target = "./datasets_fraude2/target_" + str(i) + "_fraude2.csv"
 
     if adaptation == None:
-        adaptation_methods = ["NA", "CORAL", "UOT", "OT", "SA", "reweight_UOT",
-                              "JCPOT"]  # ["UOT", "OT", "SA", "NA", "CORAL"] # ,"reweight_UOT", "JCPOT", "TCA"
+        adaptation_methods = [
+            "OT"]  # ["NA", "CORAL", "UOT", "OT", "SA", "reweight_UOT", "JCPOT"]  # ["UOT", "OT", "SA", "NA", "CORAL"] # ,"reweight_UOT", "JCPOT", "TCA"
     else:
         if type(adaptation) == str:
             adaptation_methods = [adaptation]
@@ -850,7 +894,7 @@ def start_evaluation_cluster(i: int, adaptation=None, rescale=False):
         print("Start evaluation on cluster", i, "with adaptation", adaptation_method)
         name = "cluster" + str(i) + "_fraude2"
         launch_run(name, source, target, model_hyperparams, adaptation_method=adaptation_method,
-                   nb_iteration_cv=3, rescale=rescale, cv_with_true_labels=True, filename=filename)
+                   nb_iteration_cv=2, rescale=rescale, cv_with_true_labels=True, filename=filename)
 
 
 def expe_norm():
@@ -930,30 +974,10 @@ if __name__ == '__main__':
                 start_evaluation_cluster(int(argv[2]))
             else:
                 start_evaluation_cluster(int(argv[2]), argv[3])
+        elif argv[1] == "-print_cluster":
+            latex_whole_repo("./results1205/")
+        elif argv[1] == "-expe_jcpot":
+            pass
     else:
-        """constraints = ["fraude1", "fraude2", "fraude3", "fraude4", "fraude5", "fraude6"]
-        for constraint in constraints :
-            print_whole_repo("./results0605/nuit/", constraint)  
-            print_whole_repo("./results1105/nuit/", constraint)"""
-
-        # expe_reduction()
-
-        # start_evaluation_cluster(1, "OT")
-        # print_pickle("./results1205/fraude2_rescale_OT_XGBoost0849701197")
-
-        path = "~/restitution/9_travaux/dm/2020/modeles_seg/modeles_seg_new/cluster" + str(
-            9) + "_fraude2_best_model_and_params.csv"
-        import_hyperparameters("XGBoost", path)
-        """with open('./codes/dicocluster.pickle', 'rb') as file:
-            full_dico = pickle.load(file)
-            dico = dict()
-            i = 0
-            cluster = 14
-            for key in full_dico.keys():
-                if i < 10:
-                    print(key)
-                i+=1
-                if key[:len(str(cluster))+1] == (str(cluster)+':') :
-                    dico[key[len(str(cluster))+1:]] = full_dico[key]
-            ic(dico)"""
-
+        pass
+        

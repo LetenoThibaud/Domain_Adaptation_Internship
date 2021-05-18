@@ -136,12 +136,23 @@ def reweighted_uot_adaptation(X_source, y_source, X_target, param_ot, transpose=
         return transp_Xs
 
 
-def jcpot_inverse_transport(transport, X_source):
+def jcpot_inverse_transport(transport, X_target):
+    transp_Xt = []
+    for coupling in transport.coupling_:
+        transp = coupling / np.sum(coupling, 1)[:, None]
+
+        # set nans to 0
+        transp[~ np.isfinite(transp)] = 0
+
+        # compute transported samples
+        transp_Xt.append(np.dot(transp.T, X_target))
+    return transp_Xt
+
     # adaptation of the code inverse_transport from POT : Python Optimal Transport
-    mapping = transport.coupling_[0].T / np.sum(transport.coupling_[0], 0)[:, None]
+    """mapping = transport.coupling_[0].T / np.sum(transport.coupling_[0], 0)[:, None]
     mapping[~ np.isfinite(mapping)] = 0
     transported_Xt = np.dot(mapping, X_source[0])
-    return transported_Xt
+    return transported_Xt"""
 
 
 def jcpot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
@@ -164,7 +175,10 @@ def jcpot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
     transport = ot.da.JCPOTTransport(reg_e=param_ot['reg_e'])
     transport.fit(Xs=X_source, ys=y_source, Xt=X_target)
     if transpose:
-        transp_Xt = jcpot_inverse_transport(transport, X_source)
+        """ for i in range(len(transport.coupling_)):
+            transport.coupling_[i] = transport.coupling_[i].T
+        transp_Xt = transport.transform(Xs=X_target)"""
+        transp_Xt = jcpot_inverse_transport(transport, X_target)
         return transp_Xt
     else:
         transp_Xs = transport.transform(Xs=X_source[0])
@@ -190,6 +204,8 @@ def generateSubset2(X, Y, p):
 def generateSubset4(X, Y, X_2, Y_2, p):
     """
     This function should not be used on target true label because the proportion of classes are not available.
+    :param Y_2:
+    :param X_2:
     :param X: Features
     :param Y: Labels
     :param p: Percentage of data kept.
