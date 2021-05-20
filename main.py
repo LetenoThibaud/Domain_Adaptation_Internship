@@ -1,36 +1,40 @@
 import csv
-import os
 import gzip
-import random
 import pickle
+import os, sys
+import pathlib
+import random
 import time
-import numpy as np
-import xgboost as xgb
-from sys import argv, stdout, stderr
-from threading import Thread
-import pandas as pd
 from datetime import datetime
+from sys import argv
+from threading import Thread
+
+import pandas as pd
+import xgboost as xgb
 from sklearn import preprocessing
 from sklearn.impute import SimpleImputer, KNNImputer
-import pathlib
-from icecream import ic
-from sklearn.metrics import average_precision_score
-from sklearn.model_selection import train_test_split, StratifiedKFold
 
 from baselines import *
 from optimal_transport import evalerror_AP, objective_AP, ot_cross_validation, uot_adaptation, jcpot_adaptation, \
     reweighted_uot_adaptation, ot_adaptation, normalize, create_grid_search_ot
+from ot_dim_reduction import reverse_dimension_reduction, ot_dimension_reduction, dimension_reduction
 
+# np.set_printoptions(threshold=sys.maxsize)
 
 # from OTDR import ot_dimension_reduction, reverse_dimension_reduction
 
 
 def import_source_per_year(filename, select_feature=True):
-    data = pd.read_csv(filename, index_col=False)  # .drop('index', axis='columns')
+    # .drop('index', axis='columns')
+    data = pd.read_csv(filename, index_col=False)
 
     source1 = data[data['index'].str.contains("_2016")]
     source2 = data[data['index'].str.contains("_2017")]
     source3 = data[data['index'].str.contains("_2018")]
+
+    index1 = source1.loc[:, 'index'].to_numpy()
+    index2 = source2.loc[:, 'index'].to_numpy()
+    index3 = source3.loc[:, 'index'].to_numpy()
 
     source1 = source1.drop('index', axis='columns')
     source2 = source2.drop('index', axis='columns')
@@ -52,7 +56,7 @@ def import_source_per_year(filename, select_feature=True):
     X_2 = set_nan_to_zero(X_2)
     X_3 = set_nan_to_zero(X_3)
 
-    return X_1, y_1, X_2, y_2, X_3, y_3
+    return X_1, y_1, X_2, y_2, X_3, y_3, index1, index2, index3
 
 
 def import_dataset(filename, select_feature=True):
@@ -69,7 +73,9 @@ def import_dataset(filename, select_feature=True):
 
     # y = data.loc[:, len(data.columns)-1]
     # X = data.loc[:, 0:len(data.columns)-2]
-    X = set_nan_to_zero(X)
+
+    # X = set_nan_to_zero(X)
+    X = fill_nan(X, strategy='knn', n_neighbors=20)
     return X, y
 
 
@@ -90,7 +96,7 @@ def get_normalizer_data(data, type):
         return preprocessing.RobustScaler().fit(data)
 
 
-def get_normalizer(X, norm='l2'):
+def get_normalizer(X, norm='l1'):
     if norm == 'l1':
         normalizer = np.abs(X).sum(axis=1)
     else:
@@ -470,16 +476,18 @@ def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model, normali
                                 transpose=True, adaptation="UOT"):
     if "OT" in adaptation:
         # we define the parameters to cross valid
-        possible_reg_e = [0.0000001, 0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1, 1]
-        possible_reg_cl = [0.0000001, 0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1, 1]
-        possible_weighted_reg_m = create_grid_search_ot({"0": [1, 2, 3, 5], "1": [1, 2, 3, 5]})
+        possible_reg_e = [0.001, 0.01, 0.1, 1, 10]
+        possible_reg_cl = [0.001, 0.01, 0.1, 1, 10]
+        possible_weighted_reg_m = create_grid_search_ot(
+            {"0": [1, 2, 3, 5], "1": [1, 2, 3, 5]})
 
         if adaptation == "UOT":
             param_to_cv = {'reg_e': possible_reg_e, 'reg_m': possible_reg_cl}
         elif adaptation == "JCPOT":
             param_to_cv = {'reg_e': possible_reg_e}
         elif adaptation == "reweight_UOT":
-            param_to_cv = {'reg_e': possible_reg_e, 'reg_m': possible_weighted_reg_m}
+            param_to_cv = {'reg_e': possible_reg_e,
+                           'reg_m': possible_weighted_reg_m}
         else:  # OT
             param_to_cv = {'reg_e': possible_reg_e, 'reg_cl': possible_reg_cl}
 
@@ -491,13 +499,16 @@ def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model, normali
                                                                        nb_training_iteration=nb_training_iteration,
                                                                        transpose_plan=transpose, ot_type=adaptation)
         if adaptation == "UOT":
-            param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_m': cross_val_result['reg_m']}
+            param_transport = {
+                'reg_e': cross_val_result['reg_e'], 'reg_m': cross_val_result['reg_m']}
         elif adaptation == "JCPOT":
             param_transport = {'reg_e': cross_val_result['reg_e']}
         elif adaptation == "reweight_UOT":
-            param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_m': cross_val_result['reg_m']}
+            param_transport = {
+                'reg_e': cross_val_result['reg_e'], 'reg_m': cross_val_result['reg_m']}
         else:  # OT
-            param_transport = {'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
+            param_transport = {
+                'reg_e': cross_val_result['reg_e'], 'reg_cl': cross_val_result['reg_cl']}
         return param_transport, cross_val_result_cheat
     elif adaptation == "SA":
         return {'d': components_analysis_based_method_cross_validation(Xsource, ysource, Xtarget, params_model, rescale,
@@ -516,29 +527,39 @@ def adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose, 
         # Transport sources to Target
         if not transpose:
             if adaptation == "UOT":
-                Xsource = uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+                Xsource = uot_adaptation(
+                    Xsource, ysource, Xtarget, param_transport, transpose)
             elif adaptation == "JCPOT":
-                Xsource = jcpot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+                Xsource = jcpot_adaptation(
+                    Xsource, ysource, Xtarget, param_transport, transpose)
             elif adaptation == "reweight_UOT":
-                Xsource = reweighted_uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+                Xsource = reweighted_uot_adaptation(
+                    Xsource, ysource, Xtarget, param_transport, transpose)
             else:  # OT
-                Xsource = ot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+                Xsource = ot_adaptation(
+                    Xsource, ysource, Xtarget, param_transport, transpose)
         # Unbalanced optimal transport targets to Source
         else:
             if adaptation == "UOT":
-                Xtarget = uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+                Xtarget = uot_adaptation(
+                    Xsource, ysource, Xtarget, param_transport, transpose)
             elif adaptation == "JCPOT":
-                Xtarget = jcpot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+                Xtarget = jcpot_adaptation(
+                    Xsource, ysource, Xtarget, param_transport, transpose)
             elif adaptation == "reweight_UOT":
-                Xtarget = reweighted_uot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+                Xtarget = reweighted_uot_adaptation(
+                    Xsource, ysource, Xtarget, param_transport, transpose)
             else:  # OT
-                Xtarget = ot_adaptation(Xsource, ysource, Xtarget, param_transport, transpose)
+                Xtarget = ot_adaptation(
+                    Xsource, ysource, Xtarget, param_transport, transpose)
     elif adaptation == "SA":
         original_Xsource = Xsource
-        Xsource, Xtarget = sa_adaptation(Xsource, Xtarget, param_transport, transpose)
+        Xsource, Xtarget = sa_adaptation(
+            Xsource, Xtarget, param_transport, transpose)
         # We have to do "adapt" Xclean because we work one subspace, by doing the following, we get the subspace of
         # Xclean but it is not adapted
-        _, Xclean = sa_adaptation(original_Xsource, Xclean, param_transport, transpose=False)
+        _, Xclean = sa_adaptation(
+            original_Xsource, Xclean, param_transport, transpose=False)
     elif adaptation == "CORAL":
         # original_Xsource = Xsource
         Xsource, Xtarget = coral_adaptation(Xsource, Xtarget, transpose)
@@ -603,10 +624,88 @@ def save_results(adaptation, dataset, algo, apTrain, apTest, apClean, apTarget, 
     return results
 
 
+def launch_run_jcpot(dataset, source_path, target_path, hyperparameter_file, filename, algo, adaptation_method,
+                     cv_with_true_labels, transpose, nb_iteration_cv, select_feature):
+    rescale = False
+    normalizer = None
+
+    X_source_1, y_source_1, X_source_2, y_source_2, X_source_3, y_source_3, index1, index2, index3 = import_source_per_year(
+        source_path,
+        select_feature)
+    list_X_source = [X_source_1, X_source_2, X_source_3]
+    list_y_source = [y_source_1, y_source_2, y_source_3]
+
+    # to train the model we need to have the whole X_source in one array
+    X_source, y_source = import_dataset(source_path, select_feature)
+    ic(X_source)
+    X_target, y_target = import_dataset(target_path, select_feature)
+
+    X_clean = X_target
+
+    params_model = import_hyperparameters(algo, hyperparameter_file)
+    results = {}
+    start = time.time()
+
+    now = datetime.now()
+    # create a repo per day to store the results => each repo has an id composed of the day and month
+    repo_id = now.strftime("%d%m")
+    file_id = now.strftime("%H%M%f")
+    repo_name = "results" + repo_id
+    if not os.path.exists(repo_name):
+        try:
+            os.makedirs(repo_name)
+        except:
+            pass
+
+    results[dataset] = {}
+    """param_transport, param_transport_true_label = adaptation_cross_validation(list_X_source, list_y_source, X_target,
+                                                                              params_model, normalizer,
+                                                                              rescale, y_target=y_target,
+                                                                              cv_with_true_labels=cv_with_true_labels,
+                                                                              transpose=transpose,
+                                                                              adaptation=adaptation_method,
+                                                                              nb_training_iteration=nb_iteration_cv)"""
+
+    param_transport, param_transport_true_label = {'reg_e': 1}, None
+
+    X_source, X_target, X_clean = adapt_domain(list_X_source, list_y_source, X_target, X_clean, param_transport,
+                                               transpose, adaptation_method)
+
+    # Creation of the filename
+    if filename == "":
+        if not transpose:
+            filename = f"./" + repo_name + "/" + dataset + \
+                       "_classic_" + adaptation_method + "_" + algo + file_id
+        else:
+            filename = f"./" + repo_name + "/" + dataset + \
+                       "_" + adaptation_method + "_" + algo + file_id
+
+    list_X_source = X_source
+    temp_trans_X_source = np.append(X_source[0], X_source[1], axis=0)
+    temp_trans_X_source = np.append(temp_trans_X_source, X_source[2], axis=0)
+    X_source = temp_trans_X_source
+    # X_source = np.array(X_source)
+
+    apTrain, apTest, apClean, apTarget = train_model(X_source, y_source, X_target, y_target, X_clean, params_model,
+                                                     normalizer, rescale, algo)
+    save_results(adaptation_method, dataset, algo, apTrain, apTest, apClean, apTarget, params_model,
+                 param_transport, start, filename, results, param_transport_true_label)
+
+    index1 = np.reshape(index1, (-1, 1))
+    index2 = np.reshape(index2, (-1, 1))
+    index3 = np.reshape(index3, (-1, 1))
+    ic(index1, index2, index3)
+    temp_trans_X_source = np.append(np.append(list_X_source[0], index1, axis=1),
+                                    np.append(list_X_source[1], index2, axis=1), axis=0)
+    temp_trans_X_source = np.append(temp_trans_X_source, np.append(list_X_source[2], index3, axis=1), axis=0)
+    X_source = temp_trans_X_source
+    save_csv(X_source, "source_after_JCPOT_index")
+
+
 def launch_run(dataset, source_path, target_path, hyperparameter_file, filename="", algo="XGBoost",
                adaptation_method="UOT", cv_with_true_labels=True, transpose=True, nb_iteration_cv=8,
                select_feature=True, nan_fill_strat='mean', nan_fill_constant=0, n_neighbors=20, rescale=False,
-               expe=False):
+               reduction=False):
     """
     :param rescale:
     :param dataset: name of the dataset
@@ -627,90 +726,105 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
     :param n_neighbors:
     :return:
     """
-    X_source, y_source = import_dataset(source_path, select_feature)
-    X_target, y_target = import_dataset(target_path, select_feature)
-    # ic(X_source, X_target)
-    if rescale:
-        normalizer = get_normalizer_data(X_source, "Normalizer")
-        # ic(normalizer)
-        # normalizer = get_normalizer_data(X_source, "Outliers_Robust")
-        X_source = normalize(X_source, normalizer, False)
-        X_target = normalize(X_target, normalizer, False)
-    else:
-        normalizer = None
-    X_clean = X_target
-    # ic(X_source, X_target, X_clean)
 
-    # if expe:
-    #    X_source, X_target = ot_dimension_reduction(X_source, X_target, y_target)
+    if adaptation_method != "JCPOT":
+        X_source, y_source = import_dataset(source_path, select_feature)
+        X_target, y_target = import_dataset(target_path, select_feature)
+        # ic(X_source, X_target)
+        if rescale:
+            normalizer = get_normalizer_data(X_source, "Normalizer")
+            # ic(normalizer)
+            # normalizer = get_normalizer_data(X_source, "Outliers_Robust")
+            X_source = normalize(X_source, normalizer, False)
+            X_target = normalize(X_target, normalizer, False)
+        else:
+            normalizer = None
+        X_clean = X_target
+        # ic(X_source, X_target, X_clean)
 
-    params_model = import_hyperparameters(algo, hyperparameter_file)
-    results = {}
-    start = time.time()
+        reduction_plan = None
+        if reduction:
+            # we cannot compute a specific reduction plan for the target bc we don't have the labels
+            reduction_plan, projection = ot_dimension_reduction(X_source, y_source)
+            X_source = dimension_reduction(X_source, projection)
+            X_target = dimension_reduction(X_target, projection)
+            X_clean = dimension_reduction(X_clean, projection)
 
-    now = datetime.now()
-    # create a repo per day to store the results => each repo has an id composed of the day and month
-    repo_id = now.strftime("%d%m")
-    file_id = now.strftime("%H%M%f")
-    repo_name = "results" + repo_id
-    if not os.path.exists(repo_name):
-        try:
-            os.makedirs(repo_name)
-        except:
-            pass
+        params_model = import_hyperparameters(algo, hyperparameter_file)
+        results = {}
+        start = time.time()
 
-    results[dataset] = {}
-    param_transport_true_label = {}
-    if adaptation_method != "NA":
+        now = datetime.now()
+        # create a repo per day to store the results => each repo has an id composed of the day and month
+        repo_id = now.strftime("%d%m")
+        file_id = now.strftime("%H%M%f")
+        repo_name = "results" + repo_id
+        if not os.path.exists(repo_name):
+            try:
+                os.makedirs(repo_name)
+            except:
+                pass
+
+        results[dataset] = {}
+        param_transport_true_label = {}
+        if adaptation_method != "NA":
+            """param_transport, param_transport_true_label = adaptation_cross_validation(X_source, y_source, X_target,
+                                                                                      params_model, normalizer,
+                                                                                      rescale, y_target=y_target,
+                                                                                      cv_with_true_labels=cv_with_true_labels,
+                                                                                      transpose=transpose,
+                                                                                      adaptation=adaptation_method,
+                                                                                      nb_training_iteration=nb_iteration_cv)"""
+
+            param_transport, param_transport_true_label = {'reg_e': 10, 'reg_cl': 0.1}, None
+            # save_csv(X_target, "./results2005/target_after_CORAL_reg_e_10.csv")
+            # save_csv(X_source, "./results2005/source_after_CORAL_reg_e_10.csv")
+            X_source, X_target, X_clean = adapt_domain(X_source, y_source, X_target, X_clean, param_transport,
+                                                       transpose, adaptation_method)
+        else:
+            param_transport = {}  # for the pickle
+
+        # Creation of the filename
+        if filename == "":
+            if not transpose:
+                filename = f"./" + repo_name + "/" + dataset + \
+                           "_classic_" + adaptation_method + "_" + algo + file_id
+            else:
+                filename = f"./" + repo_name + "/" + dataset + \
+                           "_" + adaptation_method + "_" + algo + file_id
         if adaptation_method in {"SA", "CORAL", "TCA"}:
             if not select_feature:
-                X_source = fill_nan(X_source, nan_fill_strat, n_neighbors)
-                X_target = fill_nan(X_target, nan_fill_strat, n_neighbors)
-                X_clean = X_target
+                ic()
+                if nan_fill_strat == "constant":
+                    param_transport['nan_fill'] = {
+                        nan_fill_strat: nan_fill_constant}
+                    filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + nan_fill_strat + "_" + \
+                               algo + "_" + file_id
+                elif nan_fill_strat == "knn":
+                    param_transport['nan_fill'] = {nan_fill_strat: n_neighbors}
+                    filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + str(
+                        n_neighbors) + "nn_" + algo + "_" + file_id
+                else:
+                    param_transport['nan_fill'] = nan_fill_strat
+                    filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + nan_fill_strat + "_" + \
+                               algo + "_" + file_id
 
-        param_transport, param_transport_true_label = adaptation_cross_validation(X_source, y_source, X_target,
-                                                                                  params_model, normalizer,
-                                                                                  rescale, y_target=y_target,
-                                                                                  cv_with_true_labels=cv_with_true_labels,
-                                                                                  transpose=transpose,
-                                                                                  adaptation=adaptation_method,
-                                                                                  nb_training_iteration=nb_iteration_cv)
+        if reduction:
+            X_source = reverse_dimension_reduction(X_source, reduction_plan)
+            X_target = reverse_dimension_reduction(X_target, reduction_plan)
+            X_clean = reverse_dimension_reduction(X_clean, reduction_plan)
 
-        X_source, X_target, X_clean = adapt_domain(X_source, y_source, X_target, X_clean, param_transport,
-                                                   transpose, adaptation_method)
+        apTrain, apTest, apClean, apTarget = train_model(X_source, y_source, X_target, y_target, X_clean, params_model,
+                                                         normalizer, rescale, algo)
+        results = save_results(adaptation_method, dataset, algo, apTrain, apTest, apClean, apTarget, params_model,
+                               param_transport, start, filename, results, param_transport_true_label)
     else:
-        param_transport = {}  # for the pickle
-
-    # Creation of the filename
-    if filename == "":
-        if rescale:
-            filename = f"./" + repo_name + "/" + dataset + "_rescale_" + adaptation_method + "_" + algo + file_id
-        else:
-            filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + algo + file_id
-    if adaptation_method in {"SA", "CORAL", "TCA"}:
-        if not select_feature:
-            ic()
-            if nan_fill_strat == "constant":
-                param_transport['nan_fill'] = {nan_fill_strat: nan_fill_constant}
-                filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + nan_fill_strat + "_" + \
-                           algo + "_" + file_id
-            elif nan_fill_strat == "knn":
-                param_transport['nan_fill'] = {nan_fill_strat: n_neighbors}
-                filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + str(
-                    n_neighbors) + "nn_" + algo + "_" + file_id
-            else:
-                param_transport['nan_fill'] = nan_fill_strat
-                filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + nan_fill_strat + "_" + \
-                           algo + "_" + file_id
-
-    apTrain, apTest, apClean, apTarget = train_model(X_source, y_source, X_target, y_target, X_clean, params_model,
-                                                     normalizer, rescale, algo)
-    results = save_results(adaptation_method, dataset, algo, apTrain, apTest, apClean, apTarget, params_model,
-                           param_transport, start, filename, results, param_transport_true_label)
+        launch_run_jcpot(dataset, source_path, target_path, hyperparameter_file, filename, algo,
+                         adaptation_method, cv_with_true_labels, transpose, nb_iteration_cv, rescale)
 
 
 def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoost", rescale=False,
-                cv_with_true_labels=True, nb_iteration_cv=8):
+                cv_with_true_labels=True, nb_iteration_cv=8, reduction=False):
     """
 
     :param nb_iteration_cv:
@@ -731,7 +845,8 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
 
     results = {}
 
-    for dataset in ['abalone20']:  # 'abalone20' , 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
+    # 'abalone20' , 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
+    for dataset in ['abalone20']:
 
         start = time.time()
         now = datetime.now()
@@ -753,7 +868,8 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
             normalizer = None
 
         # import the tuned parameters of the model for this dataset
-        params_model = import_hyperparameters(dataset_name, "hyperparameters_toy_dataset.csv", toy_example=True)
+        params_model = import_hyperparameters(
+            dataset_name, "hyperparameters_toy_dataset.csv", toy_example=True)
         param_transport = dict()
 
         # Split the dataset between the source and the target(s)
@@ -761,6 +877,14 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
                                                               stratify=y,
                                                               random_state=1234,
                                                               test_size=0.51)
+
+        """X_source_1, y_source_1, X_source_2, y_source_2, = train_test_split(Xsource, ysource, shuffle=True,
+                                                                           stratify=ysource,
+                                                                           random_state=1234,
+                                                                           test_size=0.51)
+        list_X_source = [X_source_1, X_source_2]
+        list_y_source = [y_source_1, y_source_2]"""
+
         # Keep a clean backup of Xtarget before degradation.
         Xclean = Xtarget.copy()
         # for loop -> degradation of the target
@@ -774,31 +898,39 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
             else:
                 Xtarget[np.random.choice(len(Xtarget), int(len(Xtarget) / 2)), feat] = 0
 
-        # TODO REMOVE IT
-        # Xsource, Xtarget, Popt = ot_dimension_reduction(Xsource, Xtarget, ysource)
-        # _, Xclean, _ = ot_dimension_reduction(Xsource, Xtarget, ysource)
+        reduction_plan = None
+        if reduction:
+            # we cannot compute a specific reduction plan for the target bc we don't have the labels
+            reduction_plan, projection = ot_dimension_reduction(Xsource, ysource)
+            Xsource = dimension_reduction(Xsource, projection)
+            Xtarget = dimension_reduction(Xtarget, projection)
+            Xclean = dimension_reduction(Xclean, projection)
 
         # Tune the hyperparameters of the adaptation by cross validation
-        param_transport, cheat_param_transport = adaptation_cross_validation(Xsource, ysource, Xtarget,
+        """param_transport, cheat_param_transport = adaptation_cross_validation(Xsource, ysource, Xtarget,
                                                                              params_model, normalizer,
                                                                              rescale=rescale, y_target=ytarget,
                                                                              cv_with_true_labels=cv_with_true_labels,
                                                                              transpose=transpose,
                                                                              adaptation=adaptation,
-                                                                             nb_training_iteration=nb_iteration_cv)
+                                                                             nb_training_iteration=nb_iteration_cv)"""
 
-        print(cheat_param_transport)
+        param_transport, cheat_param_transport = {'reg_e': 1, 'reg_m': 1}, None
 
         # Xsource = reverse_dimension_reduction(Xsource, Popt)
         # Xtarget = reverse_dimension_reduction(Xtarget, Popt)
         # Xclean = reverse_dimension_reduction(Xclean, Popt)
 
         # Domain adaptation
-        Xsource, Xtarget, Xclean = adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose,
+        Xsource, Xtarget, Xclean = adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport,
+                                                transpose,
                                                 adaptation)
         # Train and Learn model :
 
-        # Save informations for the run :
+        if reduction:
+            Xsource = reverse_dimension_reduction(Xsource, reduction_plan)
+            Xtarget = reverse_dimension_reduction(Xtarget, reduction_plan)
+            Xclean = reverse_dimension_reduction(Xclean, reduction_plan)
 
         # Learning and saving parameters :
         # From the source, training and test set are created
@@ -850,30 +982,7 @@ def start_evaluation(clust1: int, clust2: int, adaptation=None, rescale=False):
         start_evaluation_cluster(i, adaptation, rescale)
 
 
-def start_evaluation_cluster(i: int, adaptation=None, rescale=False, filename=""):
-    """name = ["fraude1", "fraude2", "fraude3", "fraude4", "fraude5", "fraude6"]
-
-    model_hyperparams = ["./hyperparameters/cluster20_fraude1_best_model_and_params.csv",
-                         "./hyperparameters/cluster20_fraude2_best_model_and_params.csv",
-                         "./hyperparameters/cluster20_fraude3_best_model_and_params.csv",
-                         "./hyperparameters/cluster20_fraude4_best_model_and_params.csv",
-                         "./hyperparameters/cluster20_fraude5_best_model_and_params.csv",
-                         "./hyperparameters/cluster20_fraude6_best_model_and_params.csv"]
-
-    source = ["./datasets/source_20_fraude1.csv",
-              "./datasets/source_20_fraude2.csv",
-              "./datasets/source_20_fraude3.csv",
-              "./datasets/source_20_fraude4.csv",
-              "./datasets/source_20_fraude5.csv",
-              "./datasets/source_20_fraude6.csv"]
-
-    target = ["./datasets/target_20_fraude1.csv",
-              "./datasets/target_20_fraude2.csv",
-              "./datasets/target_20_fraude3.csv",
-              "./datasets/target_20_fraude4.csv",
-              "./datasets/target_20_fraude5.csv",
-              "./datasets/target_20_fraude6.csv"]"""
-
+def start_evaluation_cluster(i: int, adaptation=None, transpose=False, filename="", reduction=False):
     model_hyperparams = "~/restitution/9_travaux/dm/2020/modeles_seg/modeles_seg_new/cluster" + str(
         i) + "_fraude2_best_model_and_params.csv"
     #
@@ -883,7 +992,7 @@ def start_evaluation_cluster(i: int, adaptation=None, rescale=False, filename=""
 
     if adaptation == None:
         adaptation_methods = [
-            "OT"]  # ["NA", "CORAL", "UOT", "OT", "SA", "reweight_UOT", "JCPOT"]  # ["UOT", "OT", "SA", "NA", "CORAL"] # ,"reweight_UOT", "JCPOT", "TCA"
+            "JCPOT"]  # ["NA", "CORAL", "UOT", "OT", "SA", "reweight_UOT", "JCPOT"]  # ["UOT", "OT", "SA", "NA", "CORAL"] # ,"reweight_UOT", "JCPOT", "TCA"
     else:
         if type(adaptation) == str:
             adaptation_methods = [adaptation]
@@ -894,7 +1003,8 @@ def start_evaluation_cluster(i: int, adaptation=None, rescale=False, filename=""
         print("Start evaluation on cluster", i, "with adaptation", adaptation_method)
         name = "cluster" + str(i) + "_fraude2"
         launch_run(name, source, target, model_hyperparams, adaptation_method=adaptation_method,
-                   nb_iteration_cv=2, rescale=rescale, cv_with_true_labels=True, filename=filename)
+                   nb_iteration_cv=2, transpose=transpose, cv_with_true_labels=True, filename=filename,
+                   reduction=reduction, rescale=True)
 
 
 def expe_norm():
@@ -954,8 +1064,13 @@ def expe_reduction():
     target = "./datasets/target_20_fraude2.csv",
 
     launch_run(name, source, target, model_hyperparams, adaptation_method="UOT",
-               nb_iteration_cv=2, rescale=False, expe=True, cv_with_true_labels=True,
+               nb_iteration_cv=2, rescale=False, reduction=True, cv_with_true_labels=True,
                filename=f"./results1105/expe_reduction")
+
+
+def save_csv(arr, name):
+    df = pd.DataFrame(arr)
+    df.to_csv(name)
 
 
 if __name__ == '__main__':
@@ -965,19 +1080,36 @@ if __name__ == '__main__':
     if len(argv) > 1:
         if argv[1] == "-launch":
             """if argv[4] == "False":
-                rescale = False
+                transpose = False
             else:
-                rescale = True"""
+                transpose = True"""
             # print("Start evaluation on cluster", int(argv[2])+1, "with adaptation",
             #      argv[3])  # , "and rescale is", rescale)
             if argv[3] == "None":
-                start_evaluation_cluster(int(argv[2]))
+                start_evaluation_cluster(
+                    int(argv[2]), "JCPOT", transpose=False)
             else:
                 start_evaluation_cluster(int(argv[2]), argv[3])
         elif argv[1] == "-print_cluster":
-            latex_whole_repo("./results1205/")
-        elif argv[1] == "-expe_jcpot":
-            pass
+            latex_whole_repo("./results1805/")
+        elif argv[1] == "-expe_jcpot1":
+            start_evaluation_cluster(12, "JCPOT", transpose=False)
+        elif argv[1] == "-expe_ot":
+            start_evaluation_cluster(12, "OT", transpose=True)
+        elif argv[1] == "-expe_ot_red":
+            start_evaluation_cluster(12, "OT", transpose=True, reduction=True)
     else:
-        pass
-        
+        # start_evaluation_cluster(12, "UOT", transpose=True)
+        # print_whole_repo("./results1805/")
+        # print_whole_repo("./results1905/")
+
+        # start_evaluation_cluster(12, "SA", transpose=True)
+
+        data = pd.read_csv("source_after_JCPOT_index.csv", index_col=False)
+        ic(data)
+        data = data.drop(data[data.iloc[:, 3] == 0.0].index)
+        open_file = open("./results2005/nb_sir.txt", 'w')
+        for siren in data.iloc[:, 213]:
+            open_file.write(siren + '\n')
+        open_file.close()
+

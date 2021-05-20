@@ -8,6 +8,9 @@ from sklearn.metrics import average_precision_score
 import itertools
 # tool to debug
 from icecream import ic
+import gzip
+import pickle
+import pandas as pd
 
 from reweighted_uot import WeightedUnbalancedSinkhornTransport
 
@@ -90,6 +93,8 @@ def ot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
     """
     transport = ot.da.SinkhornLpl1Transport(reg_e=param_ot['reg_e'], reg_cl=param_ot['reg_cl'], norm="median")
     transport.fit(Xs=X_source, ys=y_source, Xt=X_target)
+    df = pd.DataFrame(transport.coupling_)
+    df.to_csv("coupling_matrix_ot_red_rescale_knn.csv")
     if transpose:
         transp_Xt = transport.inverse_transform(Xt=X_target)
         return transp_Xt
@@ -117,7 +122,12 @@ def uot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
     transport = ot.da.UnbalancedSinkhornTransport(reg_e=param_ot['reg_e'], reg_m=param_ot['reg_m'])
     # default use sinkhorn_knopp_unbalanced
     transport.fit(Xs=X_source, ys=y_source, Xt=X_target)
+
+    df = pd.DataFrame(transport.coupling_)
+    df.to_csv("coupling_matrix_uot.csv")
+
     if transpose:
+        # transport.coupling_ = transport.coupling_ / np.mean(transport.coupling_, axis=0)
         transp_Xt = transport.inverse_transform(Xt=X_target)
         return transp_Xt
     else:
@@ -138,15 +148,25 @@ def reweighted_uot_adaptation(X_source, y_source, X_target, param_ot, transpose=
 
 def jcpot_inverse_transport(transport, X_target):
     transp_Xt = []
-    for coupling in transport.coupling_:
-        transp = coupling / np.sum(coupling, 1)[:, None]
+    for i in range(len(X_target)):
+        transp = transport.coupling_[i].T / np.sum(transport.coupling_[i], 1)[:, None]
 
         # set nans to 0
         transp[~ np.isfinite(transp)] = 0
 
         # compute transported samples
-        transp_Xt.append(np.dot(transp.T, X_target))
+        transp_Xt.append(np.dot(transp, X_target))
     return transp_Xt
+
+    """for coupling in transport.coupling_:
+        transp = coupling.T / np.sum(coupling, 1)[:, None]
+
+        # set nans to 0
+        transp[~ np.isfinite(transp)] = 0
+
+        # compute transported samples
+        transp_Xt.append(np.dot(transp, X_target))
+    return transp_Xt"""
 
     # adaptation of the code inverse_transport from POT : Python Optimal Transport
     """mapping = transport.coupling_[0].T / np.sum(transport.coupling_[0], 0)[:, None]
@@ -170,8 +190,6 @@ def jcpot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
     """
     # since JCPOT works with multisource data, X must be of shape K x (nk_source_samples, n_features))
     # => special case, we need to reformat the data after each jcpot_adaptation
-    X_source = [X_source]
-    y_source = [y_source]
     transport = ot.da.JCPOTTransport(reg_e=param_ot['reg_e'])
     transport.fit(Xs=X_source, ys=y_source, Xt=X_target)
     if transpose:
@@ -181,7 +199,7 @@ def jcpot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
         transp_Xt = jcpot_inverse_transport(transport, X_target)
         return transp_Xt
     else:
-        transp_Xs = transport.transform(Xs=X_source[0])
+        transp_Xs = transport.transform(Xs=X_source, ys=y_source, Xt=X_target)
         return transp_Xs
 
 
@@ -198,6 +216,7 @@ def generateSubset2(X, Y, p):
         idxClass = np.argwhere(Y == c).ravel()
         random.shuffle(idxClass)
         idx.extend(idxClass[0:int(p * len(idxClass))])
+    # ic(idx)
     return X[idx], Y[idx]
 
 
@@ -345,16 +364,37 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                         trans2_X_target_cheat = uot_adaptation(X_target, trans_pseudo_y_target_cheat, X_source,
                                                                param_train, transpose=False)
 
-                for j in range(8):
+                for j in range(nb_training_iteration):
                     if cv_with_true_labels and y_target is not None:
-                        subset_trans2_X_target, subset_trans_pseudo_y_target, subset_trans2_X_target_cheat,\
+                        if ot_type == "JCPOT":
+                            temp_trans2_X_target = np.append(trans2_X_target[0], trans2_X_target[1], axis=0)
+                            temp_trans2_X_target = np.append(temp_trans2_X_target, trans2_X_target[2], axis=0)
+
+                            temp_trans2_X_target_cheat = np.append(trans2_X_target_cheat[0],
+                                                                   trans2_X_target_cheat[1], axis=0)
+                            temp_trans2_X_target_cheat = np.append(temp_trans2_X_target_cheat,
+                                                                   trans2_X_target_cheat[2], axis=0)
+                            subset_trans2_X_target, subset_trans_pseudo_y_target, subset_trans2_X_target_cheat, \
+                            subset_trans_pseudo_y_target_cheat = generateSubset4(temp_trans2_X_target,
+                                                                                 trans_pseudo_y_target,
+                                                                                 temp_trans2_X_target_cheat,
+                                                                                 trans_pseudo_y_target_cheat, p=0.5)
+                        else:
+                            subset_trans2_X_target, subset_trans_pseudo_y_target, subset_trans2_X_target_cheat, \
                             subset_trans_pseudo_y_target_cheat = generateSubset4(trans2_X_target, trans_pseudo_y_target,
                                                                                  trans2_X_target_cheat,
                                                                                  trans_pseudo_y_target_cheat, p=0.5)
                     else:
-                        subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
-                                                                                               trans_pseudo_y_target,
-                                                                                               p=0.5)
+                        if ot_type == "JCPOT":
+                            temp_trans2_X_target = np.append(trans2_X_target[0], trans2_X_target[1], axis=0)
+                            temp_trans2_X_target = np.append(temp_trans2_X_target, trans2_X_target[2], axis=0)
+                            subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(temp_trans2_X_target,
+                                                                                                   trans_pseudo_y_target,
+                                                                                                   p=0.5)
+                        else:
+                            subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
+                                                                                                   trans_pseudo_y_target,
+                                                                                                   p=0.5)
 
                     # = train_test_split(trans2_X_target, trans_pseudo_y_target, test_size=0.5, shuffle=True)
                     # = generateSubset2(trans2_X_target,trans_pseudo_y_target,p=0.5)
@@ -377,9 +417,9 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                             rescaled_subset_trans2_X_target_cheat = normalize(subset_trans2_X_target_cheat,
                                                                               normalizer, True)
                             y_source_pred_cheat = predict_label(param_model,
-                                                          rescaled_subset_trans2_X_target_cheat,
-                                                          subset_trans_pseudo_y_target_cheat,
-                                                          rescaled_X_source_cheat)
+                                                                rescaled_subset_trans2_X_target_cheat,
+                                                                subset_trans_pseudo_y_target_cheat,
+                                                                rescaled_X_source_cheat)
                     else:
                         y_source_pred = predict_label(param_model,
                                                       subset_trans2_X_target,
@@ -416,8 +456,6 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                 if ot_type == "JCPOT":
                     trans_X_source = jcpot_adaptation(X_source, y_source, X_target, param_train,
                                                       transpose=False)
-                    # since JCPOT works with multisource data, X must be of shape K x (nk_source_samples, n_features))
-                    # => special case, we need to reformat the data after each jcpot_adaptation
                 elif ot_type == "reweight_UOT":
                     trans_X_source = reweighted_uot_adaptation(X_source, y_source, X_target, param_train,
                                                                transpose=False)
@@ -433,14 +471,17 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
                         # TODO
                         """rescaled_trans_X_source = normalizer.inverse_transform(trans_X_source)
                         rescaled_X_target = normalizer.inverse_transform(X_target)"""
-                        trans_pseudo_y_source = predict_label(param_model, rescaled_trans_X_source, y_source,
+                        trans_pseudo_y_target = predict_label(param_model, rescaled_trans_X_source, y_source,
                                                               rescaled_X_target)
                     else:
-                        trans_pseudo_y_source = predict_label(param_model, trans_X_source, y_source, X_target)
+                        # TODO REMETTRE EN ETAT POUR LES AUTRES OTs !!!
+                        temp_trans_X_source = np.append(trans_X_source[0], trans_X_source[1], axis=0)
+                        temp_trans_X_source = np.append(temp_trans_X_source, trans_X_source[2], axis=0)
+                        trans_pseudo_y_target = predict_label(param_model, temp_trans_X_source, y_source, X_target)
                 else:
                     # cross validation using the true target labels
                     if y_target is not None:
-                        trans_pseudo_y_source = y_target
+                        trans_pseudo_y_target = y_target
                     else:
                         print("Warning inconsistence in parameters of ot_cross_validation : cv_with_true_labels is ",
                               "True but y_target is None")
@@ -448,26 +489,35 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
 
                 # Second adaptation
                 if ot_type == "OT":
-                    trans2_X_target = ot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
+                    trans2_X_target = ot_adaptation(X_source=X_target, y_source=trans_pseudo_y_target,
                                                     X_target=X_source, param_ot=param_train,
                                                     transpose=False)
                 if ot_type == "JCPOT":
-                    trans2_X_target = jcpot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
-                                                       X_target=X_source, param_ot=param_train,
+                    concat_X_source = np.append(X_source[0], X_source[1], axis=0)
+                    concat_X_source = np.append(concat_X_source, X_source[2], axis=0)
+                    trans2_X_target = jcpot_adaptation(X_source=[X_target], y_source=trans_pseudo_y_target,
+                                                       X_target=concat_X_source, param_ot=param_train,
                                                        transpose=False)
+                    # temp_trans_X_target = []
+                    # for j in range(len(trans2_X_target)):
+                    #    temp_trans_X_target = np.append(temp_trans_X_target, trans2_X_target[i], axis=0)
+                    # trans2_X_target = temp_trans_X_target
                 elif ot_type == "reweight_UOT":
-                    trans2_X_target = reweighted_uot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
+                    trans2_X_target = reweighted_uot_adaptation(X_source=X_target, y_source=trans_pseudo_y_target,
                                                                 X_target=X_source, param_ot=param_train,
                                                                 transpose=False)
                 else:  # Unbalanced OT
-                    trans2_X_target = uot_adaptation(X_source=X_target, y_source=trans_pseudo_y_source,
+                    trans2_X_target = uot_adaptation(X_source=X_target, y_source=trans_pseudo_y_target,
                                                      X_target=X_source, param_ot=param_train,
                                                      transpose=False)
 
-                for j in range(8):
-                    ic()
+                for j in range(nb_training_iteration):
+                    print("here")
+                    print(trans2_X_target)
+                    print(trans_pseudo_y_target)
+                    ic(trans2_X_target, trans_pseudo_y_target)
                     subset_trans2_X_target, subset_trans_pseudo_y_target = generateSubset2(trans2_X_target,
-                                                                                           trans_pseudo_y_source,
+                                                                                           trans_pseudo_y_target,
                                                                                            p=0.5)
                     if rescale:
                         rescaled_X_source = normalize(X_source, normalizer, True)
@@ -499,10 +549,16 @@ def ot_cross_validation(X_source, y_source, X_target, param_model, param_to_cros
         nb_iteration += 1
         if to_save:
             ic(nb_iteration, to_save)
+
+            open_file = open("./results2005/results_cv.txt", 'w')
+            info = np.array(param_train.values())
+            open_file.writelines(info)
+            info = [str(to_save['precision']), str(to_save['average_precision'])]
+            open_file.writelines(info)
+            open_file.close()
         else:
             ic(nb_iteration)
     if cv_with_true_labels and y_target is not None and transpose_plan:
-        ic("here")
         optimal_param = max(list_results, key=lambda val: val['average_precision'])
         optimal_param_cheat = max(list_results_cheat, key=lambda val: val['average_precision'])
         return optimal_param, optimal_param_cheat
