@@ -8,20 +8,39 @@ import time
 from datetime import datetime
 from sys import argv
 from threading import Thread
-
+from scipy.stats import zscore
+import ot
 import pandas as pd
 import xgboost as xgb
 from sklearn import preprocessing
 from sklearn.impute import SimpleImputer, KNNImputer
+from sklearn.preprocessing import Normalizer
 
 from baselines import *
 from optimal_transport import evalerror_AP, objective_AP, ot_cross_validation, uot_adaptation, jcpot_adaptation, \
     reweighted_uot_adaptation, ot_adaptation, normalize, create_grid_search_ot
-from ot_dim_reduction import reverse_dimension_reduction, ot_dimension_reduction, dimension_reduction
+from ot_dim_reduction import ot_dimension_reduction, dimension_reduction, reverse_dimension_reduction
+import zipfile
+
 
 # np.set_printoptions(threshold=sys.maxsize)
 
-# from OTDR import ot_dimension_reduction, reverse_dimension_reduction
+
+def zipdir(path, ziph):
+    # ziph is zipfile handle
+    for root, dirs, files in os.walk(path):
+        for file in files:
+            ziph.write(os.path.join(root, file),
+                       os.path.relpath(os.path.join(root, file),
+                                       os.path.join(path, '..')))
+
+
+def filter_outliers(data):
+    q1 = data.quantile(0.25)
+    q3 = data.quantile(0.75)
+
+    iqr = q3 - q1
+    return data[~((data < (q1 - 1.5 * iqr)) | (data > (q3 + 1.5 * iqr)))]
 
 
 def import_source_per_year(filename, select_feature=True):
@@ -59,14 +78,18 @@ def import_source_per_year(filename, select_feature=True):
     return X_1, y_1, X_2, y_2, X_3, y_3, index1, index2, index3
 
 
-def import_dataset(filename, select_feature=True):
+def import_dataset(filename, select_feature=True, rate_path=None, cluster=-1):
     data = pd.read_csv(filename, index_col=False).drop('index', axis='columns')
 
     if select_feature:
         data = feature_selection(data)
 
+    weights = None
     y = data.loc[:, 'y'].to_numpy()
-    X = data.loc[:, data.columns != 'y'].to_numpy()
+    if rate_path is not None and cluster != -1:
+        X, weights = reweight_by_deterioration_score(data.loc[:, data.columns != 'y'], rate_path, cluster)
+    else:
+        X = data.loc[:, data.columns != 'y'].to_numpy()
 
     # data = pd.read_csv(filename, index_col=False).drop('index', axis='columns')
     # data.columns = range(data.shape[1])
@@ -76,7 +99,38 @@ def import_dataset(filename, select_feature=True):
 
     # X = set_nan_to_zero(X)
     X = fill_nan(X, strategy='knn', n_neighbors=20)
-    return X, y
+    return X, y, weights
+
+
+# WARNING REDUNDANT WITH def import_degradation_coeff(path, cluster: int): IN mod_cla_light_intern.py TODO : clean code
+def get_degradation_rates(path, cluster):
+    with open(path, 'rb') as file:
+        full_dico = pickle.load(file)
+        dico = dict()
+        for key in full_dico.keys():
+            if key[:len(str(cluster)) + 1] == (str(cluster) + ':'):
+                dico[key[len(str(cluster)) + 1:]] = full_dico[key]
+    return dico
+
+
+def reweight_by_deterioration_score(dataframe, rate_path, cluster):
+    # dictionnary containing the key(feature name) and the degradation rate applied
+    rates = get_degradation_rates(rate_path, cluster)
+    reweighted_X = np.array([])
+    weigths = []
+    for column_name in dataframe.columns:
+        preprocessing.StandardScaler().fit_transform(dataframe[column_name])
+        dataframe[column_name] = dataframe[column_name] * np.abs(1 - rates[column_name])
+        weigths = np.append(weigths, np.abs(1 - rates[column_name]))
+    return reweighted_X.to_numpy(), weigths
+
+
+def reverse_reweight_by_deterioration_score(X, rates):
+    dataframe = pd.DataFrame(X)
+    for i in len(dataframe.columns):
+        dataframe.iloc[:, i] = dataframe.iloc[:, i] / rates[i]
+        dataframe.iloc[:, i] = preprocessing.StandardScaler().inverse_transform(dataframe.iloc[:, i])
+    return dataframe.to_numpy()
 
 
 def feature_selection(dataframe):
@@ -88,35 +142,23 @@ def feature_selection(dataframe):
 
 def get_normalizer_data(data, type):
     if type == "Standard":
-        return preprocessing.StandardScaler().fit(data)
+        return preprocessing.StandardScaler().fit_transform(data)
     elif type == "Normalizer":
         normalizer = get_normalizer(data)
         return normalizer
     elif type == "Outliers_Robust":
-        return preprocessing.RobustScaler().fit(data)
+        return preprocessing.RobustScaler().fit_transform(data)
+    elif type == "Min_Max":
+        return preprocessing.MinMaxScaler().fit_transform(data)
 
 
-def get_normalizer(X, norm='l1'):
+def get_normalizer(X, norm='l2'):
     if norm == 'l1':
         normalizer = np.abs(X).sum(axis=1)
     else:
         normalizer = np.einsum('ij,ij->i', X, X)
         np.sqrt(normalizer, normalizer)
     return normalizer
-
-
-def reweight_preprocessing(X, coefficients):
-    """
-    reweight the data depending on how much impacted they are by the degradation
-    :param X: dataset without nan values
-    :param coefficients: array of the degradation coefficients
-    :return: reweighted dataset
-    """
-    reweighted_X = np.array([])
-    for i in range(X.shape[1]):
-        weight = 1 - coefficients[i] + 0.1
-        reweighted_X = np.append(reweighted_X, weight * X[i])
-    return reweighted_X
 
 
 # set_nan_to_zero must be used using the name of the features => must be called during import_dataset
@@ -386,88 +428,80 @@ def pickle_to_latex(filenames, type=""):
         print("""\\end{tabular}\n\\end{adjustbox}\n\\end{table}""")
 
 
-def cross_validation_model(filename="tuned_hyperparameters.csv"):
-    listParams = {
-        "XGBoost": listP(
-            {'max_depth': range(1, 6),
-             # 'eta': [10 ** (-i) for i in range(1, 5)],
-             # 'subsample': np.arange(0.1, 1, 0.1),
-             # 'colsample_bytree': np.arange(0.1, 1, 0.1),
-             'gamma': range(0, 21),
-             # 'num_boost_round': range(100, 1001, 100)
-             })
-    }
+def cross_validation_model(X, y, hyperparameter_file=None, filename="tuned_hyperparameters.csv", algo="XGBoost",
+                           export=False):
+    if hyperparameter_file is None:
+        listParams = {
+            "XGBoost": listP(
+                {'max_depth': range(1, 6),
+                 'eta': [10 ** (-i) for i in range(1, 5)],
+                 # 'subsample': np.arange(0.1, 1, 0.1),
+                 # 'colsample_bytree': np.arange(0.1, 1, 0.1),
+                 # 'gamma': range(0, 21),
+                 'num_round': range(100, 1001, 100)
+                 })
+        }
+    else:
+        pre_tuned_params = import_hyperparameters(algo, hyperparameter_file)
+        listParams = {
+            "XGBoost": listP(
+                {'max_depth': range(1, 6),
+                 'eta': [10 ** (-i) for i in range(1, 5)],
+                 'subsample': [pre_tuned_params['subsample']],
+                 'colsample_bytree': [pre_tuned_params['colsample_bytree']],
+                 'gamma': [pre_tuned_params['gamma']],
+                 'num_round': [pre_tuned_params['num_round']]
+                 })
+        }
 
-    nbFoldValid = 5
+    nbFoldValid = 4
     seed = 1
 
     results = {}
-    for dataset in ['abalone20', 'abalone17', 'satimage', 'abalone8']:  # ['abalone8']:  #
-        X, y = data_recovery(dataset)
-        dataset_name = dataset
-        pctPos = 100 * len(y[y == 1]) / len(y)
-        dataset = "{:05.2f}%".format(pctPos) + " " + dataset
-        print(dataset)
-        np.random.seed(seed)
-        random.seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
 
-        Xsource, Xtarget, ysource, ytarget = train_test_split(X, y, shuffle=True,
-                                                              stratify=y,
-                                                              test_size=0.51)
-        # Keep a clean backup of Xtarget before degradation.
-        Xclean = Xtarget.copy()
-        # for loop -> degradation of the target
-        # 3 features are deteriorated : the 2nd, the 3rd and the 4th
-        for feat, coef in [(2, 0.1), (3, 10), (4, 0)]:
-            # for features 2 and 3, their values are multiplied by a coefficient
-            # resp. 0.1 and 10
-            if coef != 0:
-                Xtarget[:, feat] = Xtarget[:, feat] * coef
-            # for feature 4, some of its values are (randomly) set to 0
-            else:
-                Xtarget[np.random.choice(len(Xtarget), int(len(Xtarget) / 2)),
-                        feat] = 0
+    # From the source, training and test set are created
+    Xtrain, Xtest, ytrain, ytest = train_test_split(X, y,
+                                                    shuffle=True,
+                                                    stratify=y,
+                                                    test_size=0.3)
 
-        # From the source, training and test set are created
-        Xtrain, Xtest, ytrain, ytest = train_test_split(Xsource, ysource,
-                                                        shuffle=True,
-                                                        stratify=ysource,
-                                                        test_size=0.3)
+    # MODEL CROSS VALIDATION
+    skf = StratifiedKFold(n_splits=nbFoldValid, shuffle=True)
+    foldsTrainValid = list(skf.split(Xtrain, ytrain))
+    for algo in listParams.keys():
+        start = time.time()
+        validParam = []
+        for param in listParams[algo]:
+            valid = []
+            for iFoldVal in range(nbFoldValid):
+                fTrain, fValid = foldsTrainValid[iFoldVal]
 
-        # MODEL CROSS VALIDATION
-        skf = StratifiedKFold(n_splits=nbFoldValid, shuffle=True)
-        foldsTrainValid = list(skf.split(Xtrain, ytrain))
-        results[dataset] = {}
-        for algo in listParams.keys():
-            start = time.time()
-            if len(listParams[algo]) > 1:  # Cross validation
-                validParam = []
-                for param in listParams[algo]:
-                    valid = []
-                    for iFoldVal in range(nbFoldValid):
-                        fTrain, fValid = foldsTrainValid[iFoldVal]
-                        valid.append(applyAlgo(algo, param,
-                                               Xtrain[fTrain], ytrain[fTrain],
-                                               Xtrain[fValid], ytrain[fValid],
-                                               Xtarget, ytarget, Xclean)[1])
-                    validParam.append(np.mean(valid))
-                param = listParams[algo][np.argmax(validParam)]
-            else:  # No cross-validation
-                param = listParams[algo][0]
+                dtrain = xgb.DMatrix(Xtrain[fTrain], label=ytrain[fTrain])
+                dtest = xgb.DMatrix(Xtrain[fValid])
+                evallist = [(dtrain, 'train')]
 
-            # LEARNING AND SAVING PARAMETERS
-            apTrain, apTest, apClean, apTarget = applyAlgo(algo, param,
-                                                           Xtrain, ytrain,
-                                                           Xtest, ytest,
-                                                           Xtarget, ytarget,
-                                                           Xclean)
-            results[dataset][algo] = (apTrain, apTest, apClean, apTarget, param)
-            print(dataset, algo, "Train AP {:5.2f}".format(apTrain),
-                  "Test AP {:5.2f}".format(apTest),
-                  "Clean AP {:5.2f}".format(apClean),
-                  "Target AP {:5.2f}".format(apTarget), param,
-                  "in {:6.2f}s".format(time.time() - start))
-        export_hyperparameters(dataset_name, param, filename)
+                bst = xgb.train(param, dtrain, param['num_round'],
+                                evallist, maximize=True,
+                                early_stopping_rounds=50,
+                                obj=objective_AP,
+                                feval=evalerror_AP,
+                                verbose_eval=False)
+
+                rankTrain = bst.predict(dtrain)
+                rankTest = bst.predict(dtest)
+
+                ap_train = average_precision_score(ytrain[fTrain], rankTrain) * 100
+                ap_test = average_precision_score(ytrain[fValid], rankTest) * 100
+                valid.append(ap_test)  # we store the ap of the test dataset for each fold of the cv
+            validParam.append(np.mean(valid))
+        param = listParams[algo][np.argmax(validParam)]
+        if export:
+            pass
+            # export_hyperparameters(dataset_name, param, filename)
+
+        return param
 
 
 def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model, normalizer, rescale,
@@ -476,8 +510,8 @@ def adaptation_cross_validation(Xsource, ysource, Xtarget, params_model, normali
                                 transpose=True, adaptation="UOT"):
     if "OT" in adaptation:
         # we define the parameters to cross valid
-        possible_reg_e = [0.001, 0.01, 0.1, 1, 10]
-        possible_reg_cl = [0.001, 0.01, 0.1, 1, 10]
+        possible_reg_e = [0.1, 1, 5, 10]
+        possible_reg_cl = [0.01, 0.1, 0.5, 1, 5]
         possible_weighted_reg_m = create_grid_search_ot(
             {"0": [1, 2, 3, 5], "1": [1, 2, 3, 5]})
 
@@ -573,13 +607,13 @@ def adapt_domain(Xsource, ysource, Xtarget, Xclean, param_transport, transpose, 
 
 
 def train_model(X_source, y_source, X_target, y_target, X_clean, params_model, normalizer, rescale, algo="XGBoost"):
-    if rescale:
+    """if rescale:
         ic(normalizer)
         X_source = normalize(X_source, normalizer, True)
         X_target = normalize(X_target, normalizer, True)
-        X_clean = normalize(X_clean, normalizer, True)
-        # TODO rearrange to be able to choose the normalizer
-        """X_source = normalizer.inverse_transform(X_source)
+        X_clean = normalize(X_clean, normalizer, True)"""
+    # TODO rearrange to be able to choose the normalizer
+    """X_source = normalizer.inverse_transform(X_source)
         X_target = normalizer.inverse_transform(X_target)
         X_clean = normalizer.inverse_transform(X_clean)"""
 
@@ -632,13 +666,28 @@ def launch_run_jcpot(dataset, source_path, target_path, hyperparameter_file, fil
     X_source_1, y_source_1, X_source_2, y_source_2, X_source_3, y_source_3, index1, index2, index3 = import_source_per_year(
         source_path,
         select_feature)
+
+    list_X_source = [X_source_1, X_source_2, X_source_3]
+    ic(list_X_source)
+
+    """X_source_1 = Normalizer().fit(X_source_1).transform(X_source_1)
+    X_source_2 = Normalizer().fit(X_source_2).transform(X_source_2)
+    X_source_3 = Normalizer().fit(X_source_3).transform(X_source_3)"""
+
+    X_source_1 = get_normalizer_data(X_source_1, "Min_Max")
+    X_source_2 = get_normalizer_data(X_source_2, "Min_Max")
+    X_source_3 = get_normalizer_data(X_source_3, "Min_Max")
+
     list_X_source = [X_source_1, X_source_2, X_source_3]
     list_y_source = [y_source_1, y_source_2, y_source_3]
 
     # to train the model we need to have the whole X_source in one array
-    X_source, y_source = import_dataset(source_path, select_feature)
-    ic(X_source)
-    X_target, y_target = import_dataset(target_path, select_feature)
+    X_source, y_source, _ = import_dataset(source_path, select_feature)
+    X_source = get_normalizer_data(X_source, "Min_Max")
+    # X_source = Normalizer().fit(X_source).transform(X_source)
+    X_target, y_target, _ = import_dataset(target_path, select_feature)
+    X_target = get_normalizer_data(X_target, "Min_Max")
+    # X_target = Normalizer().fit(X_target).transform(X_target)
 
     X_clean = X_target
 
@@ -666,11 +715,14 @@ def launch_run_jcpot(dataset, source_path, target_path, hyperparameter_file, fil
                                                                               adaptation=adaptation_method,
                                                                               nb_training_iteration=nb_iteration_cv)"""
 
-    param_transport, param_transport_true_label = {'reg_e': 1}, None
+    ic(list_X_source)
 
-    X_source, X_target, X_clean = adapt_domain(list_X_source, list_y_source, X_target, X_clean, param_transport,
-                                               transpose, adaptation_method)
+    param_transport, param_transport_true_label = {'reg_e': 10}, None
 
+    list_X_source, X_target, X_clean = adapt_domain(list_X_source, list_y_source, X_target, X_clean, param_transport,
+                                                    transpose=False, adaptation="JCPOT")
+
+    ic(list_X_source)
     # Creation of the filename
     if filename == "":
         if not transpose:
@@ -680,26 +732,19 @@ def launch_run_jcpot(dataset, source_path, target_path, hyperparameter_file, fil
             filename = f"./" + repo_name + "/" + dataset + \
                        "_" + adaptation_method + "_" + algo + file_id
 
-    list_X_source = X_source
-    temp_trans_X_source = np.append(X_source[0], X_source[1], axis=0)
-    temp_trans_X_source = np.append(temp_trans_X_source, X_source[2], axis=0)
+    temp_trans_X_source = np.append(list_X_source[0], list_X_source[1], axis=0)
+    temp_trans_X_source = np.append(temp_trans_X_source, list_X_source[2], axis=0)
     X_source = temp_trans_X_source
+    ic(X_source)
     # X_source = np.array(X_source)
+
+    ic(len(X_source), len(y_source))
+    # params_model = cross_validation_model(X_source, y_source, hyperparameter_file)
 
     apTrain, apTest, apClean, apTarget = train_model(X_source, y_source, X_target, y_target, X_clean, params_model,
                                                      normalizer, rescale, algo)
     save_results(adaptation_method, dataset, algo, apTrain, apTest, apClean, apTarget, params_model,
                  param_transport, start, filename, results, param_transport_true_label)
-
-    index1 = np.reshape(index1, (-1, 1))
-    index2 = np.reshape(index2, (-1, 1))
-    index3 = np.reshape(index3, (-1, 1))
-    ic(index1, index2, index3)
-    temp_trans_X_source = np.append(np.append(list_X_source[0], index1, axis=1),
-                                    np.append(list_X_source[1], index2, axis=1), axis=0)
-    temp_trans_X_source = np.append(temp_trans_X_source, np.append(list_X_source[2], index3, axis=1), axis=0)
-    X_source = temp_trans_X_source
-    save_csv(X_source, "source_after_JCPOT_index")
 
 
 def launch_run(dataset, source_path, target_path, hyperparameter_file, filename="", algo="XGBoost",
@@ -707,6 +752,7 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
                select_feature=True, nan_fill_strat='mean', nan_fill_constant=0, n_neighbors=20, rescale=False,
                reduction=False):
     """
+    :param reduction:
     :param rescale:
     :param dataset: name of the dataset
     :param source_path: path to the cvs file containing the source dataset
@@ -728,19 +774,17 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
     """
 
     if adaptation_method != "JCPOT":
-        X_source, y_source = import_dataset(source_path, select_feature)
-        X_target, y_target = import_dataset(target_path, select_feature)
+        # X_source, y_source, weights = import_dataset(source_path, select_feature, rate_path="./codes/dicocluster.pickle", cluster=12)
+        # X_target, y_target, _ = import_dataset(target_path, select_feature, rate_path="./codes/dicocluster.pickle", cluster=12)
+
+        X_source, y_source, _ = import_dataset(source_path, select_feature)
+        X_target, y_target, _ = import_dataset(target_path, select_feature)
         # ic(X_source, X_target)
-        if rescale:
-            normalizer = get_normalizer_data(X_source, "Normalizer")
-            # ic(normalizer)
-            # normalizer = get_normalizer_data(X_source, "Outliers_Robust")
-            X_source = normalize(X_source, normalizer, False)
-            X_target = normalize(X_target, normalizer, False)
-        else:
-            normalizer = None
+
+        X_source = get_normalizer_data(X_source, "Standard")
+        X_target = get_normalizer_data(X_target, "Standard")
+        normalizer = None
         X_clean = X_target
-        # ic(X_source, X_target, X_clean)
 
         reduction_plan = None
         if reduction:
@@ -786,37 +830,30 @@ def launch_run(dataset, source_path, target_path, hyperparameter_file, filename=
 
         # Creation of the filename
         if filename == "":
-            if not transpose:
+            if rescale:
                 filename = f"./" + repo_name + "/" + dataset + \
-                           "_classic_" + adaptation_method + "_" + algo + file_id
+                           "_rescale_" + adaptation_method + "_" + algo + file_id
             else:
                 filename = f"./" + repo_name + "/" + dataset + \
                            "_" + adaptation_method + "_" + algo + file_id
-        if adaptation_method in {"SA", "CORAL", "TCA"}:
-            if not select_feature:
-                ic()
-                if nan_fill_strat == "constant":
-                    param_transport['nan_fill'] = {
-                        nan_fill_strat: nan_fill_constant}
-                    filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + nan_fill_strat + "_" + \
-                               algo + "_" + file_id
-                elif nan_fill_strat == "knn":
-                    param_transport['nan_fill'] = {nan_fill_strat: n_neighbors}
-                    filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + str(
-                        n_neighbors) + "nn_" + algo + "_" + file_id
-                else:
-                    param_transport['nan_fill'] = nan_fill_strat
-                    filename = f"./" + repo_name + "/" + dataset + "_" + adaptation_method + "_" + nan_fill_strat + "_" + \
-                               algo + "_" + file_id
 
         if reduction:
             X_source = reverse_dimension_reduction(X_source, reduction_plan)
             X_target = reverse_dimension_reduction(X_target, reduction_plan)
             X_clean = reverse_dimension_reduction(X_clean, reduction_plan)
 
-        apTrain, apTest, apClean, apTarget = train_model(X_source, y_source, X_target, y_target, X_clean, params_model,
+        """if weights is not None:
+            X_source = reverse_reweight_by_deterioration_score(X_source, weights)
+            X_target = reverse_reweight_by_deterioration_score(X_target, weights)
+            X_clean = reverse_reweight_by_deterioration_score(X_clean, weights)"""
+
+        tuned_params = cross_validation_model(X_source, y_source, hyperparameter_file)
+        params_model[""]
+
+        apTrain, apTest, apClean, apTarget = train_model(X_source, y_source, X_target, y_target, X_clean, tuned_params,
                                                          normalizer, rescale, algo)
-        results = save_results(adaptation_method, dataset, algo, apTrain, apTest, apClean, apTarget, params_model,
+
+        results = save_results(adaptation_method, dataset, algo, apTrain, apTest, apClean, apTarget, tuned_params,
                                param_transport, start, filename, results, param_transport_true_label)
     else:
         launch_run_jcpot(dataset, source_path, target_path, hyperparameter_file, filename, algo,
@@ -907,15 +944,15 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
             Xclean = dimension_reduction(Xclean, projection)
 
         # Tune the hyperparameters of the adaptation by cross validation
-        """param_transport, cheat_param_transport = adaptation_cross_validation(Xsource, ysource, Xtarget,
+        param_transport, cheat_param_transport = adaptation_cross_validation(Xsource, ysource, Xtarget,
                                                                              params_model, normalizer,
                                                                              rescale=rescale, y_target=ytarget,
                                                                              cv_with_true_labels=cv_with_true_labels,
                                                                              transpose=transpose,
                                                                              adaptation=adaptation,
-                                                                             nb_training_iteration=nb_iteration_cv)"""
+                                                                             nb_training_iteration=nb_iteration_cv)
 
-        param_transport, cheat_param_transport = {'reg_e': 1, 'reg_m': 1}, None
+        # param_transport, cheat_param_transport = {'reg_e': 1, 'reg_m': 1}, None
 
         # Xsource = reverse_dimension_reduction(Xsource, Popt)
         # Xtarget = reverse_dimension_reduction(Xtarget, Popt)
@@ -939,10 +976,12 @@ def toy_example(argv, adaptation="UOT", filename="", transpose=True, algo="XGBoo
                                                         random_state=3456,
                                                         stratify=ysource,
                                                         test_size=0.3)
-        if rescale:
+        """if rescale:
             Xtrain = normalize(Xtrain, normalizer, True)
             Xtest = normalize(Xtest, normalizer, True)
-            Xtarget = normalize(Xtarget, normalizer, True)
+            Xtarget = normalize(Xtarget, normalizer, True)"""
+
+        params_model = cross_validation_model(Xsource, ysource, None)
 
         apTrain, apTest, apClean, apTarget = applyAlgo(algo, params_model,
                                                        Xtrain, ytrain,
@@ -982,7 +1021,7 @@ def start_evaluation(clust1: int, clust2: int, adaptation=None, rescale=False):
         start_evaluation_cluster(i, adaptation, rescale)
 
 
-def start_evaluation_cluster(i: int, adaptation=None, transpose=False, filename="", reduction=False):
+def start_evaluation_cluster(i: int, adaptation=None, transpose=False, filename="", rescale=False):
     model_hyperparams = "~/restitution/9_travaux/dm/2020/modeles_seg/modeles_seg_new/cluster" + str(
         i) + "_fraude2_best_model_and_params.csv"
     #
@@ -1004,7 +1043,7 @@ def start_evaluation_cluster(i: int, adaptation=None, transpose=False, filename=
         name = "cluster" + str(i) + "_fraude2"
         launch_run(name, source, target, model_hyperparams, adaptation_method=adaptation_method,
                    nb_iteration_cv=2, transpose=transpose, cv_with_true_labels=True, filename=filename,
-                   reduction=reduction, rescale=True)
+                   reduction=False, rescale=rescale)
 
 
 def expe_norm():
@@ -1059,13 +1098,15 @@ def expe_norm():
 
 def expe_reduction():
     name = "fraude2"
-    model_hyperparams = "./hyperparameters/cluster20_fraude2_best_model_and_params.csv",
-    source = "./datasets/source_20_fraude2.csv",
-    target = "./datasets/target_20_fraude2.csv",
+    model_hyperparams = "./hyperparameters/cluster1_fraude2_best_model_and_params.csv"
+    source = "./datasets_fraude2/source_1_fraude2.csv"
+    target = "./datasets_fraude2/target_1_fraude2.csv"
 
-    launch_run(name, source, target, model_hyperparams, adaptation_method="UOT",
-               nb_iteration_cv=2, rescale=False, reduction=True, cv_with_true_labels=True,
-               filename=f"./results1105/expe_reduction")
+    X_source, y_source, weights = import_dataset(source, False)
+    X_target, y_target, _ = import_dataset(target, False)
+
+    ic(len(X_source))
+    ic(len(X_target))
 
 
 def save_csv(arr, name):
@@ -1090,26 +1131,43 @@ if __name__ == '__main__':
                     int(argv[2]), "JCPOT", transpose=False)
             else:
                 start_evaluation_cluster(int(argv[2]), argv[3])
-        elif argv[1] == "-print_cluster":
-            latex_whole_repo("./results1805/")
-        elif argv[1] == "-expe_jcpot1":
-            start_evaluation_cluster(12, "JCPOT", transpose=False)
-        elif argv[1] == "-expe_ot":
-            start_evaluation_cluster(12, "OT", transpose=True)
+        elif argv[1] == "-test":
+            expe_reduction()
+        elif argv[1] == "-expe_coral1":
+            start_evaluation_cluster(1, "CORAL", transpose=False, rescale=False)
+        elif argv[1] == "-expe_coral2":
+            start_evaluation_cluster(1, "CORAL", transpose=False, rescale=True)
+        elif argv[1] == "-expe_jcpot":
+            start_evaluation_cluster(3, "JCPOT", transpose=False, rescale=False)
+        elif argv[1] == "-expe_ot1":
+            start_evaluation_cluster(1, "OT", transpose=False, rescale=False)
+        elif argv[1] == "-expe_ot2":
+            start_evaluation_cluster(1, "OT", transpose=False, rescale=True)
         elif argv[1] == "-expe_ot_red":
-            start_evaluation_cluster(12, "OT", transpose=True, reduction=True)
+            pass
+            # start_evaluation_cluster(12, "OT", transpose=True, reduction=True)
     else:
         # start_evaluation_cluster(12, "UOT", transpose=True)
         # print_whole_repo("./results1805/")
-        # print_whole_repo("./results1905/")
+        # print_whole_repo("./results2005/", '_OT_')
 
         # start_evaluation_cluster(12, "SA", transpose=True)
 
-        data = pd.read_csv("source_after_JCPOT_index.csv", index_col=False)
+        """data = pd.read_csv("source_after_JCPOT_index.csv", index_col=False)
         ic(data)
         data = data.drop(data[data.iloc[:, 3] == 0.0].index)
         open_file = open("./results2005/nb_sir.txt", 'w')
         for siren in data.iloc[:, 213]:
             open_file.write(siren + '\n')
-        open_file.close()
+        open_file.close()"""
+
+        """algo = "XGBoost"
+        hyperparameter_file = "./hyperparameters/cluster1_fraude2_best_model_and_params.csv"
+        source = "./datasets_fraude2/source_1_fraude2.csv"
+        X_source, y_source, weights = import_dataset(source, False)
+        params_model = import_hyperparameters(algo, hyperparameter_file)
+        ic(params_model)
+        params_model = cross_validation_model(X_source, y_source, hyperparameter_file)
+        ic(params_model)"""
+
 

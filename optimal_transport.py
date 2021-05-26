@@ -93,8 +93,6 @@ def ot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
     """
     transport = ot.da.SinkhornLpl1Transport(reg_e=param_ot['reg_e'], reg_cl=param_ot['reg_cl'], norm="median")
     transport.fit(Xs=X_source, ys=y_source, Xt=X_target)
-    df = pd.DataFrame(transport.coupling_)
-    df.to_csv("coupling_matrix_ot_red_rescale_knn.csv")
     if transpose:
         transp_Xt = transport.inverse_transform(Xt=X_target)
         return transp_Xt
@@ -119,7 +117,8 @@ def uot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
     # https://pythonot.github.io/gen_modules/ot.unbalanced.html
     # https://pythonot.github.io/_modules/ot/unbalanced.html#sinkhorn_knopp_unbalanced
 
-    transport = ot.da.UnbalancedSinkhornTransport(reg_e=param_ot['reg_e'], reg_m=param_ot['reg_m'])
+    transport = ot.da.UnbalancedSinkhornTransport(reg_e=param_ot['reg_e'], reg_m=param_ot['reg_m'], verbose=True,
+                                                  log=True)
     # default use sinkhorn_knopp_unbalanced
     transport.fit(Xs=X_source, ys=y_source, Xt=X_target)
 
@@ -190,7 +189,7 @@ def jcpot_adaptation(X_source, y_source, X_target, param_ot, transpose=True):
     """
     # since JCPOT works with multisource data, X must be of shape K x (nk_source_samples, n_features))
     # => special case, we need to reformat the data after each jcpot_adaptation
-    transport = ot.da.JCPOTTransport(reg_e=param_ot['reg_e'])
+    transport = ot.da.JCPOTTransport(reg_e=param_ot['reg_e'], verbose=True, log=True)
     transport.fit(Xs=X_source, ys=y_source, Xt=X_target)
     if transpose:
         """ for i in range(len(transport.coupling_)):
