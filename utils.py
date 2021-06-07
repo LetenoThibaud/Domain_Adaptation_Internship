@@ -90,17 +90,17 @@ def cross_validation_model(X, y, hyperparameter_file=None, filename="tuned_hyper
     random.seed(seed)
 
     # From the source, training and test set are created
-    Xtrain, Xtest, ytrain, ytest = train_test_split(X, y,
+    """Xtrain, Xtest, ytrain, ytest = train_test_split(X, y,
                                                     shuffle=True,
                                                     stratify=y,
-                                                    test_size=0.3)
+                                                    test_size=0.3)"""
 
     iteration = 0
     possible_param_combination = create_grid_search_ot(listParams)
 
     # MODEL CROSS VALIDATION
     skf = StratifiedKFold(n_splits=nbFoldValid, shuffle=True)
-    foldsTrainValid = list(skf.split(Xtrain, ytrain))
+    foldsTrainValid = list(skf.split(X, y))
     for algo in listParams.keys():
         start = time.time()
         validParam = []
@@ -110,8 +110,8 @@ def cross_validation_model(X, y, hyperparameter_file=None, filename="tuned_hyper
             for iFoldVal in range(nbFoldValid):
                 fTrain, fValid = foldsTrainValid[iFoldVal]
 
-                dtrain = xgb.DMatrix(Xtrain[fTrain], label=ytrain[fTrain])
-                dtest = xgb.DMatrix(Xtest[fValid])
+                dtrain = xgb.DMatrix(X[fTrain], label=y[fTrain])
+                dtest = xgb.DMatrix(X[fValid])
                 evallist = [(dtrain, 'train')]
 
                 bst = xgb.train(param, dtrain, param['num_round'],
@@ -124,8 +124,8 @@ def cross_validation_model(X, y, hyperparameter_file=None, filename="tuned_hyper
                 rankTrain = bst.predict(dtrain)
                 rankTest = bst.predict(dtest)
 
-                ap_train = average_precision_score(ytrain[fTrain], rankTrain) * 100
-                ap_test = average_precision_score(ytest[fValid], rankTest) * 100
+                ap_train = average_precision_score(y[fTrain], rankTrain) * 100
+                ap_test = average_precision_score(y[fValid], rankTest) * 100
                 valid.append(ap_test)  # we store the ap of the test dataset for each fold of the cv
             validParam.append(np.mean(valid))
             iteration += 1
