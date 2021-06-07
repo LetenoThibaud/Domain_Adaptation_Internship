@@ -111,7 +111,7 @@ def cross_validation_model(X, y, hyperparameter_file=None, filename="tuned_hyper
                 fTrain, fValid = foldsTrainValid[iFoldVal]
 
                 dtrain = xgb.DMatrix(Xtrain[fTrain], label=ytrain[fTrain])
-                dtest = xgb.DMatrix(Xtrain[fValid])
+                dtest = xgb.DMatrix(Xtest[fValid])
                 evallist = [(dtrain, 'train')]
 
                 bst = xgb.train(param, dtrain, param['num_round'],
@@ -125,7 +125,7 @@ def cross_validation_model(X, y, hyperparameter_file=None, filename="tuned_hyper
                 rankTest = bst.predict(dtest)
 
                 ap_train = average_precision_score(ytrain[fTrain], rankTrain) * 100
-                ap_test = average_precision_score(ytrain[fValid], rankTest) * 100
+                ap_test = average_precision_score(ytest[fValid], rankTest) * 100
                 valid.append(ap_test)  # we store the ap of the test dataset for each fold of the cv
             validParam.append(np.mean(valid))
             iteration += 1
