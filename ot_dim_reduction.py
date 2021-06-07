@@ -6,9 +6,9 @@ tf.disable_v2_behavior()
 """
 
 def ot_dimension_reduction(X, y, reg=1):
-    p = 2
+    p = 50
     k = 10
-    maxiter = 100
+    maxiter = 10
 
     # TODO tune p and reg !!!
 

@@ -1,13 +1,12 @@
-from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from scipy.linalg import sqrtm
+from sklearn.decomposition import PCA
 from sklearn.metrics import average_precision_score
 from sklearn.model_selection import StratifiedKFold, train_test_split
-from scipy.linalg import sqrtm
-import numpy as np
-from icecream import ic
+
 from optimal_transport import normalize
-
-
 # -------------Subspace Alignment-------------#
 from optimal_transport import predict_label
 
@@ -44,7 +43,7 @@ def sa_adaptation(X_source, X_target, param_transport, transpose=True):
 
 
 def components_analysis_based_method_cross_validation(X_source, y_source, X_target, param_model, rescale,
-                                                      normalizer=None, transport_type="SA", extended_CV = False,
+                                                      normalizer=None, transport_type="SA", extended_CV=False,
                                                       algo='XGBoost'):
     """
     Tune the subspace dimensionality parameter d.
@@ -103,19 +102,18 @@ def components_analysis_based_method_cross_validation(X_source, y_source, X_targ
     param_transport = dict()
     validParam = dict()
     for d in range(1, d_max):
-        skf = StratifiedKFold(n_splits=nbFoldValid, shuffle=True)
         param_transport["d"] = d
         if transport_type == "TCA":
             sourceAdapted, targetAdapted = tca_adaptation(X_source, X_target, param_transport)
         else:  # transport_type == "SA"
             sourceAdapted, targetAdapted = sa_adaptation(X_source, X_target, param_transport, transpose=False)
         ap_score = []
-        for i in range(10):
+        for i in range(3):
             # fold_train, fold_valid = foldsTrainValid[iFoldVal]
             # 2-fold on source examples
-            if rescale:
-                sourceAdapted = normalize(sourceAdapted, normalizer, True)
-                # TODO sourceAdapted = normalizer.inverse_transform(sourceAdapted)
+            # if rescale:
+            # sourceAdapted = normalize(sourceAdapted, normalizer, True)
+            # TODO sourceAdapted = normalizer.inverse_transform(sourceAdapted)
 
             train_X, valid_X, train_y, valid_y = train_test_split(sourceAdapted, y_source, train_size=0.5, shuffle=True)
             predicted_y_valid = predict_label(param_model, train_X, train_y, valid_X, algo)
@@ -138,17 +136,28 @@ def coral_adaptation(X_source, X_target, transpose=True):
     """
     # Classic CORAL adaptation (align the source distribution to the target one)
     if not transpose:
-        Cs = np.cov(X_source, rowvar=False) + np.eye(X_source.shape[1])
-        Ct = np.cov(X_target, rowvar=False) + np.eye(X_target.shape[1])
+        Cs = np.cov(X_source, rowvar=False)
+        Ct = np.cov(X_target, rowvar=False)
+        # pd.DataFrame(Cs).to_csv("./results0206/expe_2019_no_deterioration/covmatrix_source_.csv")
+        # pd.DataFrame(Ct).to_csv("./results0206/expe_2019_no_deterioration/covmatrix_target_.csv")
+        Cs = Cs + np.eye(X_source.shape[1])
+        Ct = Ct + np.eye(X_target.shape[1])
         Ds = X_source.dot(np.linalg.inv(np.real(sqrtm(Cs))))  # whitening source
         Ds = Ds.dot(np.real(sqrtm(Ct)))  # re-coloring with target covariance
         adapted_source = Ds
         adapted_target = X_target  # target remained unchanged
+
+        # pd.DataFrame(Cs).to_csv("./results0206/expe_2019_no_deterioration/covmatrix_pls_identity_source_.csv")
+        # pd.DataFrame(Ct).to_csv("./results0206/expe_2019_no_deterioration/covmatrix_pls_identity_target_.csv")
+
         return adapted_source, adapted_target
     # CORAL adaptation from Target to Source (align the target distribution to the source one)
     else:
         Cs = np.cov(X_source, rowvar=False) + np.eye(X_source.shape[1])
         Ct = np.cov(X_target, rowvar=False) + np.eye(X_target.shape[1])
+
+        # save the covariance matrix
+
         Dt = X_target.dot(np.linalg.inv(np.real(sqrtm(Ct))))  # whitening target
         Dt = Dt.dot(np.real(sqrtm(Cs)))  # re-coloring with source covariance
         adapted_source = X_source  # source remained unchanged
